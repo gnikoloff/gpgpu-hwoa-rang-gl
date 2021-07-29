@@ -13,7 +13,9 @@ import {
   GeometryUtils,
   UNIFORM_TYPE_VEC3,
   InstancedMesh,
+  Texture,
   Framebuffer,
+  getExtension,
 } from './lib/hwoa-rang-gl'
 
 import BASE_VERTEX_SHADER from './glsl/base-vertex.vert'
@@ -21,6 +23,7 @@ import BOXES_UPDATE_VELOCITIES_FRAGMENT_SHADER from './glsl/boxes-update-velocit
 import BOXES_UPDATE_POSITIONS_FRAGMENT_SHADER from './glsl/boxes-update-positions.frag'
 import BOX_VERTEX_SHADER from './glsl/box.vert'
 import BOX_FRAGMENT_SHADER from './glsl/box.frag'
+import POINT_LIGHT_FRAGMENT_SHADER from './glsl/point-lighting.frag'
 import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
@@ -40,7 +43,24 @@ const OPTIONS = {
   BOUNDS_X: 20,
   BOUNDS_Y: 20,
   BOUNDS_Z: 80,
+  CAMERA_NEAR: 0.1,
+  CAMERA_FAR: 100,
 }
+
+const pointLightMeshes = []
+const pointLightPositions = []
+const pointLightRadiuses = []
+
+let oldTime = 0
+
+let debugGPGPUPositionsMesh
+let debugGPGPUVelocitiesMesh
+let debugBoxesPositionsMesh
+let debugBoxesNormalsMesh
+let debugBoxesColorsMesh
+let debugBoxesDepthMesh
+
+let boxesMesh
 
 const canvas = document.createElement('canvas')
 
@@ -54,13 +74,11 @@ const gl = canvas.getContext('webgl')
 
 const mousePos = [0, 0, 0]
 
-let oldTime = 0
-
 const perspCamera = new PerspectiveCamera(
   (45 * Math.PI) / 180,
   innerWidth / innerHeight,
-  0.1,
-  100,
+  OPTIONS.CAMERA_NEAR,
+  OPTIONS.CAMERA_FAR,
 )
 perspCamera.setPosition({ x: 0, y: 0, z: 48 })
 perspCamera.lookAt([0, 0, 0])
@@ -198,12 +216,99 @@ swapRenderer
     PARTICLE_TEXTURE_HEIGHT,
   ])
 
-// const ids = new Float32Array(PARTICLE_COUNT)
-// for (let i = 0; i < PARTICLE_COUNT; i++) {
-//   ids[i] = 0
-// }
+const drawBuffersExtension = getExtension(gl, 'WEBGL_draw_buffers')
+const halfFloatTexExtension = getExtension(gl, 'OES_texture_half_float')
+const depthTextureExtension = getExtension(gl, 'WEBGL_depth_texture')
 
-let triangleMesh
+const gBuffer = gl.createFramebuffer()
+gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+
+const texturePosition = new Texture(gl, {
+  type: Framebuffer.supportRenderingToFloat(gl)
+    ? gl.FLOAT
+    : halfFloatTexExtension.HALF_FLOAT_OES,
+  format: gl.RGB,
+  minFilter: gl.NEAREST,
+  magFilter: gl.NEAREST,
+})
+  .bind()
+  .fromSize(innerWidth * devicePixelRatio, innerHeight * devicePixelRatio)
+
+gl.framebufferTexture2D(
+  gl.FRAMEBUFFER,
+  drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL,
+  gl.TEXTURE_2D,
+  texturePosition.getTexture(),
+  0,
+)
+
+const textureNormal = new Texture(gl, {
+  type: Framebuffer.supportRenderingToFloat(gl)
+    ? gl.FLOAT
+    : halfFloatTexExtension.HALF_FLOAT_OES,
+  format: gl.RGB,
+  minFilter: gl.NEAREST,
+  magFilter: gl.NEAREST,
+})
+  .bind()
+  .fromSize(innerWidth * devicePixelRatio, innerHeight * devicePixelRatio)
+
+gl.framebufferTexture2D(
+  gl.FRAMEBUFFER,
+  drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL,
+  gl.TEXTURE_2D,
+  textureNormal.getTexture(),
+  0,
+)
+
+const textureColor = new Texture(gl, {
+  type: Framebuffer.supportRenderingToFloat(gl)
+    ? gl.FLOAT
+    : halfFloatTexExtension.HALF_FLOAT_OES,
+  format: gl.RGB,
+  minFilter: gl.NEAREST,
+  magFilter: gl.NEAREST,
+})
+  .bind()
+  .fromSize(innerWidth, innerHeight)
+
+gl.framebufferTexture2D(
+  gl.FRAMEBUFFER,
+  drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL,
+  gl.TEXTURE_2D,
+  textureColor.getTexture(),
+  0,
+)
+
+const depthTexture = new Texture(gl, {
+  minFilter: gl.LINEAR,
+  magFilter: gl.LINEAR,
+  type: gl.UNSIGNED_SHORT,
+  format: gl.DEPTH_COMPONENT,
+})
+  .bind()
+  .setIsFlip(0)
+  .fromSize(innerWidth, innerHeight)
+
+gl.framebufferTexture2D(
+  gl.FRAMEBUFFER,
+  gl.DEPTH_ATTACHMENT,
+  gl.TEXTURE_2D,
+  depthTexture.getTexture(),
+  0,
+)
+
+if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+  console.log('cant use gBuffer!')
+}
+
+drawBuffersExtension.drawBuffersWEBGL([
+  drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL, // gl_FragData[0]
+  drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL, // gl_FragData[1]
+  drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL, // gl_FragData[2]
+])
+gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+
 {
   const radius = 0.5
   const { vertices, uv, normal, indices } = GeometryUtils.createBox({
@@ -220,7 +325,7 @@ let triangleMesh
       size: 1,
       instancedDivisor: 1,
     })
-  triangleMesh = new InstancedMesh(gl, {
+  boxesMesh = new InstancedMesh(gl, {
     geometry: geo,
     instanceCount: PARTICLE_COUNT,
     defines: {},
@@ -239,60 +344,122 @@ let triangleMesh
   })
 }
 
-let debugPositionsMesh
 {
-  const width = PARTICLE_TEXTURE_WIDTH
-  const height = PARTICLE_TEXTURE_HEIGHT
-  const { vertices, uv, indices } = GeometryUtils.createPlane({
-    width,
-    height,
+  const { vertices, indices } = GeometryUtils.createSphere({
+    widthSegments: 30,
+    heightSegments: 30,
   })
   const geometry = new Geometry(gl)
-    .addAttribute('position', { typedArray: vertices, size: 3 })
-    .addAttribute('uv', { typedArray: uv, size: 2 })
     .addIndex({ typedArray: indices })
-  debugPositionsMesh = new Mesh(gl, {
-    geometry,
-    uniforms: {
-      sampler: { type: UNIFORM_TYPE_INT, value: 0 },
+    .addAttribute('position', { typedArray: vertices, size: 3 })
+  const sharedUniforms = {
+    positionTexture: { type: UNIFORM_TYPE_INT, value: 0 },
+    normalTexture: { type: UNIFORM_TYPE_INT, value: 1 },
+    colorTexture: { type: UNIFORM_TYPE_INT, value: 2 },
+    resolution: {
+      type: UNIFORM_TYPE_VEC2,
+      value: [innerWidth, innerHeight],
     },
-    defines: {
-      INCLUDE_UVS: 1,
-    },
-    vertexShaderSource: BASE_VERTEX_SHADER,
-    fragmentShaderSource: PLANE_DEBUG_FRAGMENT_SHADER,
-  }).setPosition({
-    x: -innerWidth / 2 + width / 2,
-    y: -innerHeight / 2 + height / 2,
-  })
+  }
+
+  for (let i = 0; i < 5; i++) {
+    const radius = 10 + Math.random() * 20
+    const position = [
+      (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.5,
+      (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Y * 0.5,
+      ((Math.random() * 2 - 1) * OPTIONS.BOUNDS_Z) / 2,
+    ]
+    const color = [Math.random(), Math.random(), Math.random()]
+    const mesh = new Mesh(gl, {
+      geometry,
+      uniforms: {
+        ...sharedUniforms,
+        'PointLight.shininessSpecularRadius': {
+          type: UNIFORM_TYPE_VEC3,
+          value: [44, 0.3, radius],
+        },
+        'PointLight.position': {
+          type: UNIFORM_TYPE_VEC3,
+          value: position,
+        },
+        'PointLight.color': {
+          type: UNIFORM_TYPE_VEC3,
+          value: color,
+        },
+      },
+      vertexShaderSource: BASE_VERTEX_SHADER,
+      fragmentShaderSource: POINT_LIGHT_FRAGMENT_SHADER,
+    })
+    mesh
+      .setPosition({ x: position[0], y: position[1], z: position[2] })
+      .setScale({ x: radius, y: radius, z: radius })
+    pointLightPositions.push(position)
+    pointLightMeshes.push(mesh)
+    pointLightRadiuses.push(radius)
+  }
 }
 
-let debugVelocitiesMesh
 {
-  const width = PARTICLE_TEXTURE_WIDTH
-  const height = PARTICLE_TEXTURE_HEIGHT
-  const { vertices, uv, indices } = GeometryUtils.createPlane({
-    width,
-    height,
-  })
-  const geometry = new Geometry(gl)
-    .addAttribute('position', { typedArray: vertices, size: 3 })
-    .addAttribute('uv', { typedArray: uv, size: 2 })
-    .addIndex({ typedArray: indices })
-  debugVelocitiesMesh = new Mesh(gl, {
-    geometry,
-    uniforms: {
-      sampler: { type: UNIFORM_TYPE_INT, value: 0 },
+  const debugMeshHeightReference = PARTICLE_TEXTURE_HEIGHT
+  const debugMeshHeightDelta = debugMeshHeightReference / innerHeight
+
+  const gpgpuDebugWidth = PARTICLE_TEXTURE_WIDTH
+  const gpgpguDebugHeight = PARTICLE_TEXTURE_HEIGHT
+
+  const gBufferDebugWidth = innerWidth * debugMeshHeightDelta
+  const gBufferDebugHeight = innerHeight * debugMeshHeightDelta
+
+  let debugMeshAccumulatedX = 0
+
+  debugGPGPUPositionsMesh = createDebugPlane(
+    gpgpuDebugWidth,
+    gpgpguDebugHeight,
+    -innerWidth / 2,
+    -innerHeight / 2,
+  )
+  debugMeshAccumulatedX += gpgpuDebugWidth
+  debugGPGPUVelocitiesMesh = createDebugPlane(
+    gpgpuDebugWidth,
+    gpgpguDebugHeight,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2,
+  )
+  debugMeshAccumulatedX += gpgpuDebugWidth
+  debugBoxesPositionsMesh = createDebugPlane(
+    gBufferDebugWidth,
+    gBufferDebugHeight,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2,
+  )
+  debugMeshAccumulatedX += gBufferDebugWidth
+
+  debugBoxesNormalsMesh = createDebugPlane(
+    gBufferDebugWidth,
+    gBufferDebugHeight,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2,
+  )
+  debugMeshAccumulatedX += gBufferDebugWidth
+
+  debugBoxesColorsMesh = createDebugPlane(
+    gBufferDebugWidth,
+    gBufferDebugHeight,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2,
+  )
+  debugMeshAccumulatedX += gBufferDebugWidth
+
+  debugBoxesDepthMesh = createDebugPlane(
+    gBufferDebugWidth,
+    gBufferDebugHeight,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2,
+    {
+      IS_DEPTH_TEXTURE: 1,
+      NEAR_PLANE: OPTIONS.CAMERA_NEAR,
+      FAR_PLANE: `${OPTIONS.CAMERA_FAR}.0`,
     },
-    defines: {
-      INCLUDE_UVS: 1,
-    },
-    vertexShaderSource: BASE_VERTEX_SHADER,
-    fragmentShaderSource: PLANE_DEBUG_FRAGMENT_SHADER,
-  }).setPosition({
-    x: -innerWidth / 2 + width / 2 + width,
-    y: -innerHeight / 2 + height / 2,
-  })
+  )
 }
 
 document.body.addEventListener('mousemove', (e) => {
@@ -310,6 +477,8 @@ function drawFrame(ts) {
   requestAnimationFrame(drawFrame)
 
   // mousePos[2] = Math.sin(ts * 0.2) * 20
+
+  gl.disable(gl.BLEND)
 
   swapRenderer
     .setSize(PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT)
@@ -335,26 +504,108 @@ function drawFrame(ts) {
 
   gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
   gl.clearColor(0.4, 0.4, 0.4, 1.0)
-  gl.enable(gl.DEPTH_TEST)
+
+  gl.blendFunc(gl.ONE, gl.ONE)
+  gl.depthFunc(gl.LEQUAL)
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+  {
+    gl.depthMask(true)
+    gl.enable(gl.DEPTH_TEST)
+    gl.disable(gl.BLEND)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+
+    gl.activeTexture(gl.TEXTURE0)
+    swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+    gl.activeTexture(gl.TEXTURE1)
+    swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+    boxesMesh
+      .use()
+      .setUniform('time', UNIFORM_TYPE_FLOAT, ts)
+      .setCamera(perspCamera)
+      .draw()
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+
+  gl.depthMask(false)
+  gl.disable(gl.DEPTH_TEST)
+  gl.enable(gl.BLEND)
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
   gl.activeTexture(gl.TEXTURE0)
-  swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+  texturePosition.bind()
   gl.activeTexture(gl.TEXTURE1)
-  swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-  triangleMesh
-    .use()
-    .setUniform('time', UNIFORM_TYPE_FLOAT, ts)
-    .setCamera(perspCamera)
-    .draw()
+  textureNormal.bind()
+  gl.activeTexture(gl.TEXTURE2)
+  textureColor.bind()
+
+  pointLightMeshes.forEach((mesh, i) => {
+    const position = pointLightPositions[i]
+    const radius = pointLightRadiuses[i]
+    position[2] += dt * 4
+    if (position[2] > OPTIONS.BOUNDS_Z / 2 + radius) {
+      position[2] = -OPTIONS.BOUNDS_Z / 2
+    }
+    mesh
+      .use()
+      .setPosition({ z: pointLightPositions[i][2] })
+      .setUniform(
+        'PointLight.position',
+        UNIFORM_TYPE_VEC3,
+        pointLightPositions[i],
+      )
+      .setCamera(perspCamera)
+      .draw()
+  })
 
   gl.disable(gl.BLEND)
 
   gl.activeTexture(gl.TEXTURE0)
   swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
-  debugPositionsMesh.use().setCamera(orthoCamera).draw()
+  debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
 
   gl.activeTexture(gl.TEXTURE0)
   swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-  debugVelocitiesMesh.use().setCamera(orthoCamera).draw()
+  debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
+
+  gl.activeTexture(gl.TEXTURE0)
+  texturePosition.bind()
+  debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
+
+  gl.activeTexture(gl.TEXTURE0)
+  textureNormal.bind()
+  debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
+
+  gl.activeTexture(gl.TEXTURE0)
+  textureColor.bind()
+  debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
+
+  gl.activeTexture(gl.TEXTURE0)
+  depthTexture.bind()
+  debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
+}
+
+function createDebugPlane(width, height, x, y, defines = {}) {
+  const { vertices, uv, indices } = GeometryUtils.createPlane({
+    width,
+    height,
+  })
+  const geometry = new Geometry(gl)
+    .addAttribute('position', { typedArray: vertices, size: 3 })
+    .addAttribute('uv', { typedArray: uv, size: 2 })
+    .addIndex({ typedArray: indices })
+  const mesh = new Mesh(gl, {
+    geometry,
+    uniforms: {
+      sampler: { type: UNIFORM_TYPE_INT, value: 0 },
+    },
+    defines: {
+      ...defines,
+      INCLUDE_UVS: 1,
+    },
+    vertexShaderSource: BASE_VERTEX_SHADER,
+    fragmentShaderSource: PLANE_DEBUG_FRAGMENT_SHADER,
+  })
+  mesh.setPosition({ x: x + width / 2, y: y + height / 2 })
+  return mesh
 }

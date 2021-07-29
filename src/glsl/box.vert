@@ -11,6 +11,7 @@ uniform vec2 textureDimensions;
 
 varying vec3 v_normal;
 varying vec3 v_position;
+varying vec3 v_positionFromCamera;
 
 vec4 getValFromTextureArray (sampler2D texture, vec2 dimensions, float index) {
   float y = floor(index / dimensions.x);
@@ -61,12 +62,15 @@ void main () {
                         position.xyz +
                         getValFromTextureArray(positionsTexture, textureDimensions, id).rgb;
 
+  vec4 worldPosition = instanceModelMatrix *
+                       modelMatrix *
+                       vec4(offsetPosition, 1.0);
+
   gl_Position = projectionMatrix *
                 viewMatrix *
-                instanceModelMatrix *
-                modelMatrix *
-                vec4(offsetPosition, 1.0);
+                worldPosition;
 
   v_normal = rotation3d * normal;
-  v_position = -(viewMatrix * vec4(offsetPosition, 1.0)).xyz;
+  v_position = worldPosition.xyz;
+  v_positionFromCamera = -(viewMatrix * vec4(offsetPosition, 1.0)).xyz;
 }
