@@ -24,6 +24,7 @@ import BOXES_UPDATE_POSITIONS_FRAGMENT_SHADER from './glsl/boxes-update-position
 import BOX_VERTEX_SHADER from './glsl/box.vert'
 import BOX_FRAGMENT_SHADER from './glsl/box.frag'
 import POINT_LIGHT_FRAGMENT_SHADER from './glsl/point-lighting.frag'
+import DIRECTIONAL_LIGHT_FRAGMENT_SHADER from './glsl/directional-lighting.frag'
 import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
@@ -35,13 +36,13 @@ const VELOCITIES_TEXTURE_2_NAME = 'velocitiesTexture2'
 const POSITIONS_TEXTURE_1_NAME = 'positionsTexture1'
 const POSITIONS_TEXTURE_2_NAME = 'positionsTexture2'
 
-const PARTICLE_TEXTURE_WIDTH = 128
-const PARTICLE_TEXTURE_HEIGHT = 128
+const PARTICLE_TEXTURE_WIDTH = 200
+const PARTICLE_TEXTURE_HEIGHT = 200
 const PARTICLE_COUNT = PARTICLE_TEXTURE_WIDTH * PARTICLE_TEXTURE_HEIGHT
 
 const OPTIONS = {
-  BOUNDS_X: 20,
-  BOUNDS_Y: 20,
+  BOUNDS_X: 40,
+  BOUNDS_Y: 40,
   BOUNDS_Z: 80,
   CAMERA_NEAR: 0.1,
   CAMERA_FAR: 100,
@@ -53,14 +54,15 @@ const pointLightRadiuses = []
 
 let oldTime = 0
 
+let boxesMesh
+let directionalLightMesh
+
 let debugGPGPUPositionsMesh
 let debugGPGPUVelocitiesMesh
 let debugBoxesPositionsMesh
 let debugBoxesNormalsMesh
 let debugBoxesColorsMesh
 let debugBoxesDepthMesh
-
-let boxesMesh
 
 const canvas = document.createElement('canvas')
 
@@ -101,9 +103,9 @@ const swapRenderer = new SwapRenderer(gl)
 const ids = new Array(PARTICLE_COUNT).fill(0).map((_, i) => i)
 const positions = ids
   .map(() => [
-    (Math.random() * 2 - 1) * 10,
-    (Math.random() * 2 - 1) * 10,
-    (Math.random() * 2 - 1) * 80,
+    (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.3,
+    (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Y * 0.3,
+    (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Z * 0.3,
     0,
   ])
   .flat()
@@ -316,10 +318,19 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     height: radius,
     depth: radius,
   })
+  const rgb = new Float32Array(PARTICLE_COUNT)
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    rgb[i] = Math.random() * 0.2
+  }
   const geo = new Geometry(gl)
     .addIndex({ typedArray: indices })
     .addAttribute('position', { typedArray: vertices, size: 3 })
     .addAttribute('normal', { typedArray: normal, size: 3 })
+    .addAttribute('rgb', {
+      typedArray: rgb,
+      size: 1,
+      instancedDivisor: 1,
+    })
     .addAttribute('id', {
       typedArray: new Float32Array(ids),
       size: 1,
@@ -362,7 +373,7 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     },
   }
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 24; i++) {
     const radius = 10 + Math.random() * 20
     const position = [
       (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.5,
@@ -397,6 +408,30 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     pointLightMeshes.push(mesh)
     pointLightRadiuses.push(radius)
   }
+}
+
+{
+  const { indices, vertices } = GeometryUtils.createPlane({
+    width: innerWidth,
+    height: innerHeight,
+  })
+  const geometry = new Geometry(gl)
+    .addIndex({ typedArray: indices })
+    .addAttribute('position', { typedArray: vertices, size: 3 })
+
+  directionalLightMesh = new Mesh(gl, {
+    geometry,
+    uniforms: {
+      resolution: { type: UNIFORM_TYPE_VEC2, value: [innerWidth, innerHeight] },
+      positionTexture: { type: UNIFORM_TYPE_INT, value: 0 },
+      normalTexture: { type: UNIFORM_TYPE_INT, value: 1 },
+      colorTexture: { type: UNIFORM_TYPE_INT, value: 2 },
+      lightDirection: { type: UNIFORM_TYPE_VEC3, value: [10, 10, 0] },
+      lightFactor: { type: UNIFORM_TYPE_FLOAT, value: 0.1 },
+    },
+    vertexShaderSource: BASE_VERTEX_SHADER,
+    fragmentShaderSource: DIRECTIONAL_LIGHT_FRAGMENT_SHADER,
+  })
 }
 
 {
@@ -484,7 +519,7 @@ function drawFrame(ts) {
     .setSize(PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT)
     .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
     // @ts-ignore
-    .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
+    // .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
     // @ts-ignore
     .setUniform('delta', UNIFORM_TYPE_FLOAT, dt)
     .run(
@@ -557,6 +592,8 @@ function drawFrame(ts) {
       .setCamera(perspCamera)
       .draw()
   })
+
+  directionalLightMesh.use().setCamera(orthoCamera).draw()
 
   gl.disable(gl.BLEND)
 

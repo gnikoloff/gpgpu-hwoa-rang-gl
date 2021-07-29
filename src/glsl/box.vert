@@ -4,6 +4,7 @@ attribute vec4 position;
 attribute float id;
 attribute mat4 instanceModelMatrix;
 attribute vec3 normal;
+attribute float rgb;
 
 uniform sampler2D positionsTexture;
 uniform sampler2D velocitiesTexture;
@@ -12,6 +13,7 @@ uniform vec2 textureDimensions;
 varying vec3 v_normal;
 varying vec3 v_position;
 varying vec3 v_positionFromCamera;
+varying float v_rgb;
 
 vec4 getValFromTextureArray (sampler2D texture, vec2 dimensions, float index) {
   float y = floor(index / dimensions.x);
@@ -72,5 +74,6 @@ void main () {
 
   v_normal = rotation3d * normal;
   v_position = worldPosition.xyz;
+  v_rgb = rgb;
   v_positionFromCamera = -(viewMatrix * vec4(offsetPosition, 1.0)).xyz;
 }

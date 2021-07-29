@@ -9,8 +9,8 @@ void main () {
   vec4 velocity = texture2D(velocitiesTexture, texCoords);
 
   vec4 newPosition = position + velocity * delta;
-  if (newPosition.z > BOUNDS_Z) {
-    newPosition.z = -BOUNDS_Z;
+  if (newPosition.z > BOUNDS_Z * 0.5) {
+    newPosition.z = -BOUNDS_Z * 0.5;
   }
   gl_FragColor = newPosition;
   gl_FragColor.a = 1.0;

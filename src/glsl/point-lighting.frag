@@ -38,6 +38,8 @@ void main () {
     float nDotL = max(dot(lightDirection, normal), 0.0);
     vec3 diffuse = nDotL * PointLight.color;
 
+    
+
     gl_FragColor = vec4(
       diffuse *
       baseColor.rgb *
