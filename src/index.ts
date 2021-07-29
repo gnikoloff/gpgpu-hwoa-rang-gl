@@ -1,4 +1,3 @@
-import { toHalf } from './helpers'
 import './index.css'
 
 import {
@@ -17,25 +16,12 @@ import {
   Framebuffer,
 } from './lib/hwoa-rang-gl'
 
-const BASE_VERTEX_SHADER = `
-  attribute vec4 position;
-
-  #ifdef INCLUDE_UVS
-    attribute vec2 uv;
-
-    varying vec2 v_uv;
-  #endif
-
-  void main () {
-    gl_Position = projectionMatrix * viewMatrix * modelMatrix * position;
-
-    // gl_PointSize = 10.0;
-
-    #ifdef INCLUDE_UVS
-      v_uv = uv;
-    #endif
-  }
-`
+import BASE_VERTEX_SHADER from './glsl/base-vertex.vert'
+import BOXES_UPDATE_VELOCITIES_FRAGMENT_SHADER from './glsl/boxes-update-velocities.frag'
+import BOXES_UPDATE_POSITIONS_FRAGMENT_SHADER from './glsl/boxes-update-positions.frag'
+import BOX_VERTEX_SHADER from './glsl/box.vert'
+import BOX_FRAGMENT_SHADER from './glsl/box.frag'
+import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
 const UPDATE_POSITIONS_PROGRAM_NAME = 'updatePositions'
@@ -49,6 +35,12 @@ const POSITIONS_TEXTURE_2_NAME = 'positionsTexture2'
 const PARTICLE_TEXTURE_WIDTH = 128
 const PARTICLE_TEXTURE_HEIGHT = 128
 const PARTICLE_COUNT = PARTICLE_TEXTURE_WIDTH * PARTICLE_TEXTURE_HEIGHT
+
+const OPTIONS = {
+  BOUNDS_X: 20,
+  BOUNDS_Y: 20,
+  BOUNDS_Z: 80,
+}
 
 const canvas = document.createElement('canvas')
 
@@ -70,7 +62,7 @@ const perspCamera = new PerspectiveCamera(
   0.1,
   100,
 )
-perspCamera.setPosition({ x: 0, y: 10, z: 10 })
+perspCamera.setPosition({ x: 0, y: 0, z: 48 })
 perspCamera.lookAt([0, 0, 0])
 
 const orthoCamera = new OrthographicCamera(
@@ -84,7 +76,7 @@ const orthoCamera = new OrthographicCamera(
 orthoCamera.setPosition({ x: 0, y: 0, z: 1 })
 orthoCamera.lookAt([0, 0, 0])
 
-const cameraControl = new CameraController(perspCamera)
+new CameraController(perspCamera)
 
 const swapRenderer = new SwapRenderer(gl)
 
@@ -93,123 +85,48 @@ const positions = ids
   .map(() => [
     (Math.random() * 2 - 1) * 10,
     (Math.random() * 2 - 1) * 10,
-    (Math.random() * 2 - 1) * 10,
+    (Math.random() * 2 - 1) * 80,
     0,
   ])
   .flat()
 const typedPositions = Framebuffer.supportRenderingToFloat(gl)
   ? new Float32Array(positions)
-  : new Uint16Array(positions.map(toHalf))
+  : new Uint8Array(positions)
 const velocities = ids
   .map(() => [
     (Math.random() * 2 - 1) * 10,
     Math.random() * 0.01,
-    Math.random() * 1,
+    Math.random() * 20,
     1,
   ])
   // .map(() => [0, 0, 0])
   .flat()
 const typedVelocities = Framebuffer.supportRenderingToFloat(gl)
   ? new Float32Array(velocities)
-  : new Uint16Array(velocities.map(toHalf))
-
-// console.log(velocities)
+  : new Uint8Array(velocities)
 
 swapRenderer
   .createProgram(
     UPDATE_VELOCITIES_PROGRAM_NAME,
     BASE_VERTEX_SHADER,
-    `
-  uniform sampler2D positionsTexture;
-  uniform sampler2D velocitiesTexture;
-  uniform vec3 mousePos;
-  uniform vec2 textureDimensions;
-  uniform float delta;
-
-  const float BOUNDS_X = 40.0;
-  const float BOUNDS_Y = 40.0;
-  const float BOUNDS_Z = 40.0;
-
-  const float SPEED_LIMIT = 4.0;
-
-  void main () {
-    float limit = SPEED_LIMIT;
-
-    vec2 texCoords = gl_FragCoord.xy / textureDimensions;
-    vec4 position = texture2D(positionsTexture, texCoords);
-    vec4 velocity = texture2D(velocitiesTexture, texCoords);
-    
-
-    vec4 dir = vec4(mousePos.x * BOUNDS_X, mousePos.y * BOUNDS_Y, 0.0, 0.0) - position;
-    dir.z = 0.0;
-
-    float dist = length(dir);
-    float distSquared = dist * dist;
-
-    float mouseRadius = 10.0;
-    float mouseRadiusSquared = mouseRadius * mouseRadius;
-    
-
-    if (dist < mouseRadius) {
-      float f = (distSquared / mouseRadiusSquared - 1.0) * delta * 20.0;
-      velocity += normalize(dir) * f;
-      limit += 5.0;
-    }
-    vec4 newPosition = position + velocity * delta * 15.0;
-
-    if (newPosition.x > BOUNDS_X * 0.5) {
-      velocity.x *= -1.0;
-    }
-    if (newPosition.x < -BOUNDS_X * 0.5) {
-      velocity.x *= -1.0;
-    }
-
-    if (newPosition.y > BOUNDS_Y * 0.5) {
-      velocity.y *= -1.0;
-    }
-    if (newPosition.y < -BOUNDS_Y * 0.5) {
-      velocity.y *= -1.0;
-    }
-
-    if (newPosition.z > BOUNDS_Z * 0.5) {
-      velocity.z *= -1.0;
-    }
-    if (newPosition.z < -BOUNDS_Z * 0.5) {
-      velocity.z *= -1.0;
-    }
-
-    // Speed Limits
-    if ( length( velocity ) > limit ) {
-      velocity = normalize( velocity ) * limit;
-    }
-    gl_FragColor = velocity;
-    // gl_FragColor.a = 1.0;
-  }
-`,
+    BOXES_UPDATE_VELOCITIES_FRAGMENT_SHADER,
+    {
+      SPEED_LIMIT: '4.0',
+      BOUNDS_X: `${OPTIONS.BOUNDS_X}.0`,
+      BOUNDS_Y: `${OPTIONS.BOUNDS_Y}.0`,
+      BOUNDS_Z: `${OPTIONS.BOUNDS_Z}.0`,
+    },
   )
   .createProgram(
     UPDATE_POSITIONS_PROGRAM_NAME,
     BASE_VERTEX_SHADER,
-    `
-      uniform sampler2D positionsTexture;
-      uniform sampler2D velocitiesTexture;
-      uniform vec2 textureDimensions;
-      uniform float delta;
-
-      void main () {
-        vec2 texCoords = gl_FragCoord.xy / textureDimensions;
-        vec4 position = texture2D(positionsTexture, texCoords);
-        vec4 velocity = texture2D(velocitiesTexture, texCoords);
-
-        vec4 newPosition = position + velocity * delta;
-        gl_FragColor = newPosition;
-        gl_FragColor.a = 1.0;
-      }
-  `,
+    BOXES_UPDATE_POSITIONS_FRAGMENT_SHADER,
+    {
+      BOUNDS_Z: `${OPTIONS.BOUNDS_Z}.0`,
+    },
   )
 
   // Positions
-
   .createTexture(
     POSITIONS_TEXTURE_1_NAME,
     PARTICLE_TEXTURE_WIDTH,
@@ -315,89 +232,12 @@ let triangleMesh
         type: UNIFORM_TYPE_VEC2,
         value: [PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT],
       },
+      fogDensity: { type: UNIFORM_TYPE_FLOAT, value: 0.02 },
     },
-    vertexShaderSource: `
-    uniform float time;
-
-    attribute vec4 position;
-    attribute float id;
-    attribute mat4 instanceModelMatrix;
-    attribute vec3 normal;
-
-    uniform sampler2D positionsTexture;
-    uniform sampler2D velocitiesTexture;
-    uniform vec2 textureDimensions;
-
-    varying vec3 v_normal;
-
-    vec4 getValFromTextureArray (sampler2D texture, vec2 dimensions, float index) {
-      float y = floor(index / dimensions.x);
-      float x = mod(index, dimensions.x);
-      vec2 texCoords = (vec2(x, y) + 0.5) / dimensions;
-      return texture2D(texture, texCoords);
-    }
-
-    mat3 rotation3dX(float angle) {
-      float s = sin(angle);
-      float c = cos(angle);
-
-      return mat3(
-        1.0, 0.0, 0.0,
-        0.0, c, s,
-        0.0, -s, c
-      );
-    }
-
-    mat3 rotation3dY(float angle) {
-      float s = sin(angle);
-      float c = cos(angle);
-
-      return mat3(
-        c, 0.0, -s,
-        0.0, 1.0, 0.0,
-        s, 0.0, c
-      );
-    }
-
-    mat3 rotation3dZ(float angle) {
-      float s = sin(angle);
-      float c = cos(angle);
-
-      return mat3(
-        c, s, 0.0,
-        -s, c, 0.0,
-        0.0, 0.0, 1.0
-      );
-    }
-
-    void main () {
-      vec4 velocity = getValFromTextureArray(velocitiesTexture, textureDimensions, id);      
-
-      mat3 rotation3d = rotation3dX(velocity.x) * rotation3dY(velocity.y) * rotation3dZ(velocity.z);
-
-      vec3 offsetPosition = rotation3d *
-                            position.xyz +
-                            getValFromTextureArray(positionsTexture, textureDimensions, id).rgb;
-
-      gl_Position = projectionMatrix *
-                    viewMatrix *
-                    instanceModelMatrix *
-                    modelMatrix *
-                    vec4(offsetPosition, 1.0);
-
-      v_normal = rotation3d * normal;
-    }
-  `,
-    fragmentShaderSource: `
-      varying vec3 v_normal;
-      void main () {
-        vec3 normal = normalize(v_normal);
-        gl_FragColor = vec4(normal, 1.0);
-      }
-  `,
+    vertexShaderSource: BOX_VERTEX_SHADER,
+    fragmentShaderSource: BOX_FRAGMENT_SHADER,
   })
 }
-// mesh.drawMode = gl.POINTS
 
 let debugPositionsMesh
 {
@@ -420,14 +260,7 @@ let debugPositionsMesh
       INCLUDE_UVS: 1,
     },
     vertexShaderSource: BASE_VERTEX_SHADER,
-    fragmentShaderSource: `
-      uniform sampler2D sampler;
-      varying vec2 v_uv;
-
-      void main () {
-        gl_FragColor = texture2D(sampler, v_uv);
-      }
-    `,
+    fragmentShaderSource: PLANE_DEBUG_FRAGMENT_SHADER,
   }).setPosition({
     x: -innerWidth / 2 + width / 2,
     y: -innerHeight / 2 + height / 2,
@@ -455,14 +288,7 @@ let debugVelocitiesMesh
       INCLUDE_UVS: 1,
     },
     vertexShaderSource: BASE_VERTEX_SHADER,
-    fragmentShaderSource: `
-      uniform sampler2D sampler;
-      varying vec2 v_uv;
-
-      void main () {
-        gl_FragColor = texture2D(sampler, v_uv);
-      }
-    `,
+    fragmentShaderSource: PLANE_DEBUG_FRAGMENT_SHADER,
   }).setPosition({
     x: -innerWidth / 2 + width / 2 + width,
     y: -innerHeight / 2 + height / 2,
@@ -483,14 +309,10 @@ function drawFrame(ts) {
 
   requestAnimationFrame(drawFrame)
 
-  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
-  gl.clearColor(0.4, 0.4, 0.4, 1.0)
-  gl.enable(gl.DEPTH_TEST)
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-
   // mousePos[2] = Math.sin(ts * 0.2) * 20
 
   swapRenderer
+    .setSize(PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT)
     .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
     // @ts-ignore
     .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
@@ -511,14 +333,10 @@ function drawFrame(ts) {
     )
     .swap(POSITIONS_TEXTURE_1_NAME, POSITIONS_TEXTURE_2_NAME)
 
-  // boxMesh.use().setCamera(perspCamera).draw()
-
-  // gl.enable(gl.CULL_FACE)
-  // gl.cullFace(gl.CCW)
-  // gl.cullFace(gl.FRONT_AND_BACK)
-
-  gl.enable(gl.BLEND)
-  gl.blendFunc(gl.ONE, gl.ONE)
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+  gl.clearColor(0.4, 0.4, 0.4, 1.0)
+  gl.enable(gl.DEPTH_TEST)
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
   gl.activeTexture(gl.TEXTURE0)
   swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()

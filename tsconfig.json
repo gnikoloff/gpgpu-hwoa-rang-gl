@@ -14,7 +14,8 @@
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "typeRoots": [
-      "./npm_modules/@types/"
+      "./npm_modules/@types/",
+      "./src/types"
     ]
   },
   "include": [
