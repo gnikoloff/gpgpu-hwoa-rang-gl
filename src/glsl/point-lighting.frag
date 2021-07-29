@@ -25,7 +25,7 @@ void main () {
   float shininess = PointLight.shininessSpecularRadius.x;
   float lightR = PointLight.shininessSpecularRadius.z;
 
-  float dist = distance(PointLight.position, position) * 2.0;
+  float dist = distance(PointLight.position, position);
 
   if(dist < lightR){
     float attenuation = dist / (1.0 - (dist / lightR) * (dist / lightR));
@@ -42,6 +42,7 @@ void main () {
 
     gl_FragColor = vec4(
       diffuse *
+      PointLight.color *
       baseColor.rgb *
       attenuation *
       shininess,

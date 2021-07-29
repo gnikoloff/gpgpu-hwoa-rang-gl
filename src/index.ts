@@ -26,6 +26,7 @@ import BOX_FRAGMENT_SHADER from './glsl/box.frag'
 import POINT_LIGHT_FRAGMENT_SHADER from './glsl/point-lighting.frag'
 import DIRECTIONAL_LIGHT_FRAGMENT_SHADER from './glsl/directional-lighting.frag'
 import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
+import { toHalf } from './helpers'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
 const UPDATE_POSITIONS_PROGRAM_NAME = 'updatePositions'
@@ -36,14 +37,14 @@ const VELOCITIES_TEXTURE_2_NAME = 'velocitiesTexture2'
 const POSITIONS_TEXTURE_1_NAME = 'positionsTexture1'
 const POSITIONS_TEXTURE_2_NAME = 'positionsTexture2'
 
-const PARTICLE_TEXTURE_WIDTH = 200
-const PARTICLE_TEXTURE_HEIGHT = 200
+const PARTICLE_TEXTURE_WIDTH = 100
+const PARTICLE_TEXTURE_HEIGHT = 100
 const PARTICLE_COUNT = PARTICLE_TEXTURE_WIDTH * PARTICLE_TEXTURE_HEIGHT
 
 const OPTIONS = {
   BOUNDS_X: 40,
   BOUNDS_Y: 40,
-  BOUNDS_Z: 80,
+  BOUNDS_Z: 120,
   CAMERA_NEAR: 0.1,
   CAMERA_FAR: 100,
 }
@@ -82,7 +83,7 @@ const perspCamera = new PerspectiveCamera(
   OPTIONS.CAMERA_NEAR,
   OPTIONS.CAMERA_FAR,
 )
-perspCamera.setPosition({ x: 0, y: 0, z: 48 })
+perspCamera.setPosition({ x: 0, y: 0, z: OPTIONS.BOUNDS_Z / 2 })
 perspCamera.lookAt([0, 0, 0])
 
 const orthoCamera = new OrthographicCamera(
@@ -96,7 +97,7 @@ const orthoCamera = new OrthographicCamera(
 orthoCamera.setPosition({ x: 0, y: 0, z: 1 })
 orthoCamera.lookAt([0, 0, 0])
 
-new CameraController(perspCamera)
+// new CameraController(perspCamera)
 
 const swapRenderer = new SwapRenderer(gl)
 
@@ -111,7 +112,7 @@ const positions = ids
   .flat()
 const typedPositions = Framebuffer.supportRenderingToFloat(gl)
   ? new Float32Array(positions)
-  : new Uint8Array(positions)
+  : new Uint16Array(positions.map(toHalf))
 const velocities = ids
   .map(() => [
     (Math.random() * 2 - 1) * 10,
@@ -123,7 +124,7 @@ const velocities = ids
   .flat()
 const typedVelocities = Framebuffer.supportRenderingToFloat(gl)
   ? new Float32Array(velocities)
-  : new Uint8Array(velocities)
+  : new Uint16Array(velocities.map(toHalf))
 
 swapRenderer
   .createProgram(
@@ -222,48 +223,24 @@ const drawBuffersExtension = getExtension(gl, 'WEBGL_draw_buffers')
 const halfFloatTexExtension = getExtension(gl, 'OES_texture_half_float')
 const depthTextureExtension = getExtension(gl, 'WEBGL_depth_texture')
 
-const gBuffer = gl.createFramebuffer()
-gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+let gBuffer
 
-const texturePosition = new Texture(gl, {
-  type: Framebuffer.supportRenderingToFloat(gl)
-    ? gl.FLOAT
-    : halfFloatTexExtension.HALF_FLOAT_OES,
-  format: gl.RGB,
-  minFilter: gl.NEAREST,
-  magFilter: gl.NEAREST,
-})
-  .bind()
-  .fromSize(innerWidth * devicePixelRatio, innerHeight * devicePixelRatio)
+let texturePositionFramebuffer
+let textureNormalFramebuffer
+let textureColorFramebuffer
+let textureDepthFramebuffer
 
-gl.framebufferTexture2D(
-  gl.FRAMEBUFFER,
-  drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL,
-  gl.TEXTURE_2D,
-  texturePosition.getTexture(),
-  0,
-)
+let texturePosition
+let textureNormal
+let textureColor
+let depthTexture
 
-const textureNormal = new Texture(gl, {
-  type: Framebuffer.supportRenderingToFloat(gl)
-    ? gl.FLOAT
-    : halfFloatTexExtension.HALF_FLOAT_OES,
-  format: gl.RGB,
-  minFilter: gl.NEAREST,
-  magFilter: gl.NEAREST,
-})
-  .bind()
-  .fromSize(innerWidth * devicePixelRatio, innerHeight * devicePixelRatio)
+if (drawBuffersExtension) {
+  gBuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+}
 
-gl.framebufferTexture2D(
-  gl.FRAMEBUFFER,
-  drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL,
-  gl.TEXTURE_2D,
-  textureNormal.getTexture(),
-  0,
-)
-
-const textureColor = new Texture(gl, {
+texturePosition = new Texture(gl, {
   type: Framebuffer.supportRenderingToFloat(gl)
     ? gl.FLOAT
     : halfFloatTexExtension.HALF_FLOAT_OES,
@@ -274,15 +251,59 @@ const textureColor = new Texture(gl, {
   .bind()
   .fromSize(innerWidth, innerHeight)
 
-gl.framebufferTexture2D(
-  gl.FRAMEBUFFER,
-  drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL,
-  gl.TEXTURE_2D,
-  textureColor.getTexture(),
-  0,
-)
+if (drawBuffersExtension) {
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL,
+    gl.TEXTURE_2D,
+    texturePosition.getTexture(),
+    0,
+  )
+}
 
-const depthTexture = new Texture(gl, {
+textureNormal = new Texture(gl, {
+  type: Framebuffer.supportRenderingToFloat(gl)
+    ? gl.FLOAT
+    : halfFloatTexExtension.HALF_FLOAT_OES,
+  format: gl.RGB,
+  minFilter: gl.NEAREST,
+  magFilter: gl.NEAREST,
+})
+  .bind()
+  .fromSize(innerWidth, innerHeight)
+
+if (drawBuffersExtension) {
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL,
+    gl.TEXTURE_2D,
+    textureNormal.getTexture(),
+    0,
+  )
+}
+
+textureColor = new Texture(gl, {
+  type: Framebuffer.supportRenderingToFloat(gl)
+    ? gl.FLOAT
+    : halfFloatTexExtension.HALF_FLOAT_OES,
+  format: gl.RGB,
+  minFilter: gl.NEAREST,
+  magFilter: gl.NEAREST,
+})
+  .bind()
+  .fromSize(innerWidth, innerHeight)
+
+if (drawBuffersExtension) {
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL,
+    gl.TEXTURE_2D,
+    textureColor.getTexture(),
+    0,
+  )
+}
+
+depthTexture = new Texture(gl, {
   minFilter: gl.LINEAR,
   magFilter: gl.LINEAR,
   type: gl.UNSIGNED_SHORT,
@@ -291,25 +312,49 @@ const depthTexture = new Texture(gl, {
   .bind()
   .setIsFlip(0)
   .fromSize(innerWidth, innerHeight)
-
-gl.framebufferTexture2D(
-  gl.FRAMEBUFFER,
-  gl.DEPTH_ATTACHMENT,
-  gl.TEXTURE_2D,
-  depthTexture.getTexture(),
-  0,
-)
-
-if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-  console.log('cant use gBuffer!')
+if (drawBuffersExtension) {
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.DEPTH_ATTACHMENT,
+    gl.TEXTURE_2D,
+    depthTexture.getTexture(),
+    0,
+  )
 }
 
-drawBuffersExtension.drawBuffersWEBGL([
-  drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL, // gl_FragData[0]
-  drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL, // gl_FragData[1]
-  drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL, // gl_FragData[2]
-])
-gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+const supportGBuffer =
+  drawBuffersExtension &&
+  gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+
+if (supportGBuffer) {
+  drawBuffersExtension.drawBuffersWEBGL([
+    drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL, // gl_FragData[0]
+    drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL, // gl_FragData[1]
+    drawBuffersExtension.COLOR_ATTACHMENT2_WEBGL, // gl_FragData[2]
+  ])
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+} else {
+  texturePositionFramebuffer = new Framebuffer(gl, {
+    inputTexture: texturePosition,
+    width: innerWidth,
+    height: innerHeight,
+  })
+  textureNormalFramebuffer = new Framebuffer(gl, {
+    inputTexture: textureNormal,
+    width: innerWidth,
+    height: innerHeight,
+  })
+  textureColorFramebuffer = new Framebuffer(gl, {
+    inputTexture: textureColor,
+    width: innerWidth,
+    height: innerHeight,
+  })
+  textureDepthFramebuffer = new Framebuffer(gl, {
+    width: innerWidth,
+    height: innerHeight,
+    useDepthRenderBuffer: false,
+  })
+}
 
 {
   const radius = 0.5
@@ -339,8 +384,11 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   boxesMesh = new InstancedMesh(gl, {
     geometry: geo,
     instanceCount: PARTICLE_COUNT,
-    defines: {},
+    defines: {
+      G_BUFFER_SUPPORTED: supportGBuffer ? 1 : 0,
+    },
     uniforms: {
+      fallbackGBufferMode: { type: UNIFORM_TYPE_INT, value: 0 },
       time: { type: UNIFORM_TYPE_FLOAT, value: 0 },
       positionsTexture: { type: UNIFORM_TYPE_INT, value: 0 },
       velocitiesTexture: { type: UNIFORM_TYPE_INT, value: 1 },
@@ -356,9 +404,8 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 }
 
 {
-  const { vertices, indices } = GeometryUtils.createSphere({
-    widthSegments: 30,
-    heightSegments: 30,
+  const { vertices, indices } = GeometryUtils.createCircle({
+    segments: 30,
   })
   const geometry = new Geometry(gl)
     .addIndex({ typedArray: indices })
@@ -369,12 +416,12 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     colorTexture: { type: UNIFORM_TYPE_INT, value: 2 },
     resolution: {
       type: UNIFORM_TYPE_VEC2,
-      value: [innerWidth, innerHeight],
+      value: [innerWidth * devicePixelRatio, innerHeight * devicePixelRatio],
     },
   }
 
-  for (let i = 0; i < 24; i++) {
-    const radius = 10 + Math.random() * 20
+  for (let i = 0; i < 40; i++) {
+    const radius = Math.random() * 12
     const position = [
       (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.5,
       (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Y * 0.5,
@@ -422,7 +469,10 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   directionalLightMesh = new Mesh(gl, {
     geometry,
     uniforms: {
-      resolution: { type: UNIFORM_TYPE_VEC2, value: [innerWidth, innerHeight] },
+      resolution: {
+        type: UNIFORM_TYPE_VEC2,
+        value: [innerWidth * devicePixelRatio, innerHeight * devicePixelRatio],
+      },
       positionTexture: { type: UNIFORM_TYPE_INT, value: 0 },
       normalTexture: { type: UNIFORM_TYPE_INT, value: 1 },
       colorTexture: { type: UNIFORM_TYPE_INT, value: 2 },
@@ -435,11 +485,11 @@ gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 }
 
 {
-  const debugMeshHeightReference = PARTICLE_TEXTURE_HEIGHT
+  const debugMeshHeightReference = PARTICLE_TEXTURE_HEIGHT * 0.5
   const debugMeshHeightDelta = debugMeshHeightReference / innerHeight
 
-  const gpgpuDebugWidth = PARTICLE_TEXTURE_WIDTH
-  const gpgpguDebugHeight = PARTICLE_TEXTURE_HEIGHT
+  const gpgpuDebugWidth = debugMeshHeightReference
+  const gpgpguDebugHeight = debugMeshHeightReference
 
   const gBufferDebugWidth = innerWidth * debugMeshHeightDelta
   const gBufferDebugHeight = innerHeight * debugMeshHeightDelta
@@ -511,7 +561,7 @@ function drawFrame(ts) {
 
   requestAnimationFrame(drawFrame)
 
-  // mousePos[2] = Math.sin(ts * 0.2) * 20
+  mousePos[2] = Math.sin(ts * 0.2) * 2
 
   gl.disable(gl.BLEND)
 
@@ -519,7 +569,7 @@ function drawFrame(ts) {
     .setSize(PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT)
     .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
     // @ts-ignore
-    // .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
+    .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
     // @ts-ignore
     .setUniform('delta', UNIFORM_TYPE_FLOAT, dt)
     .run(
@@ -538,29 +588,58 @@ function drawFrame(ts) {
     .swap(POSITIONS_TEXTURE_1_NAME, POSITIONS_TEXTURE_2_NAME)
 
   gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
-  gl.clearColor(0.4, 0.4, 0.4, 1.0)
+  gl.clearColor(0.1, 0.1, 0.1, 1.0)
 
   gl.blendFunc(gl.ONE, gl.ONE)
   gl.depthFunc(gl.LEQUAL)
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
-  {
-    gl.depthMask(true)
-    gl.enable(gl.DEPTH_TEST)
-    gl.disable(gl.BLEND)
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+  if (supportGBuffer) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+    {
+      gl.depthMask(true)
+      gl.enable(gl.DEPTH_TEST)
+      gl.disable(gl.BLEND)
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
-    gl.activeTexture(gl.TEXTURE0)
-    swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
-    gl.activeTexture(gl.TEXTURE1)
-    swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-    boxesMesh
-      .use()
-      .setUniform('time', UNIFORM_TYPE_FLOAT, ts)
-      .setCamera(perspCamera)
-      .draw()
+      gl.activeTexture(gl.TEXTURE0)
+      swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+      gl.activeTexture(gl.TEXTURE1)
+      swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+      boxesMesh
+        .use()
+        .setUniform('time', UNIFORM_TYPE_FLOAT, ts)
+        .setCamera(perspCamera)
+        .draw()
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  } else {
+    gl.viewport(0, 0, innerWidth, innerHeight)
+    ;[
+      texturePositionFramebuffer,
+      textureNormalFramebuffer,
+      textureColorFramebuffer,
+      textureDepthFramebuffer,
+    ].map((framebuffer, i) => {
+      framebuffer.bind()
+      gl.depthMask(true)
+      gl.enable(gl.DEPTH_TEST)
+      gl.disable(gl.BLEND)
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+
+      gl.activeTexture(gl.TEXTURE0)
+      swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+      gl.activeTexture(gl.TEXTURE1)
+      swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+      boxesMesh
+        .use()
+        .setUniform('fallbackGBufferMode', UNIFORM_TYPE_INT, i)
+        .setUniform('time', UNIFORM_TYPE_FLOAT, ts)
+        .setCamera(perspCamera)
+        .draw()
+      framebuffer.unbind()
+    })
   }
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
 
   gl.depthMask(false)
   gl.disable(gl.DEPTH_TEST)
@@ -577,13 +656,19 @@ function drawFrame(ts) {
   pointLightMeshes.forEach((mesh, i) => {
     const position = pointLightPositions[i]
     const radius = pointLightRadiuses[i]
-    position[2] += dt * 4
+    position[0] = Math.cos(ts + i + mousePos[0]) * OPTIONS.BOUNDS_X * 0.35
+    position[1] = Math.sin(ts + i + mousePos[1]) * OPTIONS.BOUNDS_Y * 0.35
+    position[2] += dt * 12
     if (position[2] > OPTIONS.BOUNDS_Z / 2 + radius) {
       position[2] = -OPTIONS.BOUNDS_Z / 2
     }
     mesh
       .use()
-      .setPosition({ z: pointLightPositions[i][2] })
+      .setPosition({
+        x: position[0],
+        y: position[1],
+        z: position[2],
+      })
       .setUniform(
         'PointLight.position',
         UNIFORM_TYPE_VEC3,
@@ -597,29 +682,33 @@ function drawFrame(ts) {
 
   gl.disable(gl.BLEND)
 
-  gl.activeTexture(gl.TEXTURE0)
-  swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
-  debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+  // debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-  debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+  // debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  texturePosition.bind()
-  debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // texturePosition.bind()
+  // debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  textureNormal.bind()
-  debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // textureNormal.bind()
+  // debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  textureColor.bind()
-  debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // textureColor.bind()
+  // debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  depthTexture.bind()
-  debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
+  // gl.activeTexture(gl.TEXTURE0)
+  // if (supportGBuffer) {
+  //   depthTexture.bind()
+  // } else {
+  //   textureDepthFramebuffer.depthTexture.bind()
+  // }
+  // debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
 }
 
 function createDebugPlane(width, height, x, y, defines = {}) {

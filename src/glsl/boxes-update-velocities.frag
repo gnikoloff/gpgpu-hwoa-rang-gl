@@ -12,7 +12,7 @@ void main () {
   vec4 velocity = texture2D(velocitiesTexture, texCoords);
   
 
-  vec4 dir = vec4(mousePos.x * BOUNDS_X, mousePos.y * BOUNDS_Y, 0.0, 0.0) - position;
+  vec4 dir = vec4(mousePos.x * BOUNDS_X, mousePos.y * BOUNDS_Y, mousePos.z * BOUNDS_Z, 0.0) - position;
   dir.z = 0.0;
 
   float dist = length(dir);
