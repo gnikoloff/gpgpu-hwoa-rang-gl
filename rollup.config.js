@@ -33,7 +33,10 @@ export default {
     }),
     sourcemaps(),
     copy({
-      targets: [{ src: `index.html`, dest: `dist` }],
+      targets: [
+        { src: `index.html`, dest: `dist` },
+        { src: `src/assets`, dest: `dist` },
+      ],
     }),
     glslify(),
     process.env.NODE_ENV === 'production' && uglify(),
