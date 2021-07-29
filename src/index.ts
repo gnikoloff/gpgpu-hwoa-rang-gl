@@ -1,5 +1,8 @@
 import './index.css'
 
+import { GUI } from 'dat.gui'
+import Stats from 'stats.js'
+
 import {
   Geometry,
   PerspectiveCamera,
@@ -26,6 +29,7 @@ import POINT_LIGHT_FRAGMENT_SHADER from './glsl/point-lighting.frag'
 import DIRECTIONAL_LIGHT_FRAGMENT_SHADER from './glsl/directional-lighting.frag'
 import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
 import { toHalf } from './helpers'
+import { UNIFORM_TYPE_VEC4 } from './lib/hwoa-rang-gl/dist/esm'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
 const UPDATE_POSITIONS_PROGRAM_NAME = 'updatePositions'
@@ -36,17 +40,119 @@ const VELOCITIES_TEXTURE_2_NAME = 'velocitiesTexture2'
 const POSITIONS_TEXTURE_1_NAME = 'positionsTexture1'
 const POSITIONS_TEXTURE_2_NAME = 'positionsTexture2'
 
-const PARTICLE_TEXTURE_WIDTH = 100
-const PARTICLE_TEXTURE_HEIGHT = 100
-const PARTICLE_COUNT = PARTICLE_TEXTURE_WIDTH * PARTICLE_TEXTURE_HEIGHT
+const MAX_ALLOWED_POINT_LIGHTS = 200
+
+const queryParams = new URLSearchParams(location.search)
 
 const OPTIONS = {
-  BOUNDS_X: 40,
-  BOUNDS_Y: 40,
+  SPEED_LIMIT: 3,
+  BOUNDS_X: 80,
+  BOUNDS_Y: 80,
   BOUNDS_Z: 120,
   CAMERA_NEAR: 0.1,
   CAMERA_FAR: 100,
+  PARTICLE_COUNT: parseInt(queryParams.get('particleCount')) || 10000,
+
+  pointLightActive: 80,
+  debugMode: false,
+  dirLightFactor: 0.0185,
 }
+
+const PARTICLE_TEXTURE_WIDTH = Math.floor(Math.sqrt(OPTIONS.PARTICLE_COUNT))
+const PARTICLE_TEXTURE_HEIGHT = Math.floor(Math.sqrt(OPTIONS.PARTICLE_COUNT))
+
+const stats = new Stats()
+stats.showPanel(0)
+document.body.appendChild(stats.dom)
+stats.dom.style.setProperty('display', 'none')
+
+const guiControls = new GUI()
+guiControls
+  .add(OPTIONS, 'debugMode')
+  .name('Debug Mode')
+  .onChange((v) => {
+    if (v) {
+      stats.dom.style.setProperty('display', 'block')
+    } else {
+      stats.dom.style.setProperty('display', 'none')
+    }
+  })
+guiControls
+  .add(OPTIONS, 'PARTICLE_COUNT', [10000, 40000, 100000])
+  .name('Box Count')
+  .onChange((val) => {
+    const queryParams = new URLSearchParams()
+    queryParams.append('particleCount', val)
+    location.replace(`${location.origin}?${queryParams.toString()}`)
+  })
+guiControls
+  .add(OPTIONS, 'pointLightActive')
+  .min(0)
+  .max(MAX_ALLOWED_POINT_LIGHTS)
+  .name('Point lights count')
+guiControls
+  .add(OPTIONS, 'dirLightFactor')
+  .min(0.005)
+  .max(1)
+  .step(0.001)
+  .onChange((val) => {
+    directionalLightMesh
+      .use()
+      .setUniform('lightFactor', UNIFORM_TYPE_FLOAT, val)
+  })
+  .name('Light Factor')
+guiControls
+  .add(OPTIONS, 'BOUNDS_X')
+  .min(40)
+  .max(90)
+  .step(1)
+  .onChange((val) => {
+    swapRenderer
+      .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
+      // @ts-ignore
+      .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+        val,
+        OPTIONS.BOUNDS_Y,
+        OPTIONS.BOUNDS_Z,
+      ])
+      .useProgram(UPDATE_POSITIONS_PROGRAM_NAME)
+      // @ts-ignore
+      .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+        val,
+        OPTIONS.BOUNDS_Y,
+        OPTIONS.BOUNDS_Z,
+      ])
+    // directionalLightMesh
+    //   .use()
+    //   .setUniform('lightFactor', UNIFORM_TYPE_FLOAT, val)
+  })
+  .name('World Size X')
+guiControls
+  .add(OPTIONS, 'BOUNDS_Y')
+  .min(40)
+  .max(90)
+  .step(1)
+  .onChange((val) => {
+    swapRenderer
+      .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
+      // @ts-ignore
+      .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+        OPTIONS.BOUNDS_X,
+        val,
+        OPTIONS.BOUNDS_Z,
+      ])
+      .useProgram(UPDATE_POSITIONS_PROGRAM_NAME)
+      // @ts-ignore
+      .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+        OPTIONS.BOUNDS_X,
+        val,
+        OPTIONS.BOUNDS_Z,
+      ])
+    // directionalLightMesh
+    //   .use()
+    //   .setUniform('lightFactor', UNIFORM_TYPE_FLOAT, val)
+  })
+  .name('World Size Y')
 
 const pointLightMeshes = []
 const pointLightPositions = []
@@ -54,6 +160,7 @@ const pointLightRadiuses = []
 
 let oldTime = 0
 
+let rAf
 let boxesMesh
 let directionalLightMesh
 
@@ -79,14 +186,14 @@ let depthTexture
 const canvas = document.createElement('canvas')
 
 document.body.appendChild(canvas)
-canvas.width = innerWidth * devicePixelRatio
-canvas.height = innerHeight * devicePixelRatio
-canvas.style.setProperty('width', `${innerWidth}px`)
-canvas.style.setProperty('height', `${innerHeight}px`)
 
 const gl = canvas.getContext('webgl')
 
 const mousePos = [0, 0, 0]
+const mousePosTarget = [...mousePos]
+
+const cameraPos = [0, 0, OPTIONS.BOUNDS_Z / 2 + 10]
+const cameraPosTarget = [...cameraPos]
 
 /*
   Camera setup
@@ -97,7 +204,7 @@ const perspCamera = new PerspectiveCamera(
   OPTIONS.CAMERA_NEAR,
   OPTIONS.CAMERA_FAR,
 )
-perspCamera.setPosition({ x: 0, y: 0, z: OPTIONS.BOUNDS_Z / 2 })
+perspCamera.setPosition({ x: 0, y: 0, z: OPTIONS.BOUNDS_Z / 2 + 10 })
 perspCamera.lookAt([0, 0, 0])
 
 const orthoCamera = new OrthographicCamera(
@@ -117,12 +224,12 @@ orthoCamera.lookAt([0, 0, 0])
   GPGPU SwapRenderer
 */
 const swapRenderer = new SwapRenderer(gl)
-const ids = new Array(PARTICLE_COUNT).fill(0).map((_, i) => i)
+const ids = new Array(OPTIONS.PARTICLE_COUNT).fill(0).map((_, i) => i)
 const positions = ids
   .map(() => [
     (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.3,
     (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Y * 0.3,
-    (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Z * 0.3,
+    (Math.random() * 2 - 1) * OPTIONS.BOUNDS_Z * 0.4,
     0,
   ])
   .flat()
@@ -147,10 +254,7 @@ swapRenderer
     BASE_VERTEX_SHADER,
     BOXES_UPDATE_VELOCITIES_FRAGMENT_SHADER,
     {
-      SPEED_LIMIT: '4.0',
-      BOUNDS_X: `${OPTIONS.BOUNDS_X}.0`,
-      BOUNDS_Y: `${OPTIONS.BOUNDS_Y}.0`,
-      BOUNDS_Z: `${OPTIONS.BOUNDS_Z}.0`,
+      SPEED_LIMIT: `${OPTIONS.SPEED_LIMIT}.0`,
     },
   )
   .createProgram(
@@ -219,6 +323,12 @@ swapRenderer
   */
   .useProgram(UPDATE_POSITIONS_PROGRAM_NAME)
   // @ts-ignore
+  .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+    OPTIONS.BOUNDS_X,
+    OPTIONS.BOUNDS_Y,
+    OPTIONS.BOUNDS_Z,
+  ])
+  // @ts-ignore
   .setUniform('positionsTexture', UNIFORM_TYPE_INT, 0)
   // @ts-ignore
   .setUniform('velocitiesTexture', UNIFORM_TYPE_INT, 1)
@@ -233,7 +343,15 @@ swapRenderer
   */
   .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
   // @ts-ignore
+  .setUniform('worldBounds', UNIFORM_TYPE_VEC3, [
+    OPTIONS.BOUNDS_X,
+    OPTIONS.BOUNDS_Y,
+    OPTIONS.BOUNDS_Z,
+  ])
+  // @ts-ignore
   .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
+  // @ts-ignore
+  .setUniform('predator0', UNIFORM_TYPE_VEC4, [0, 0, 0, 0])
   // @ts-ignore
   .setUniform('positionsTexture', UNIFORM_TYPE_INT, 0)
   // @ts-ignore
@@ -393,19 +511,10 @@ if (supportGBuffer) {
     height: radius,
     depth: radius,
   })
-  const rgb = new Float32Array(PARTICLE_COUNT)
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    rgb[i] = Math.random() * 0.2
-  }
   const geo = new Geometry(gl)
     .addIndex({ typedArray: indices })
     .addAttribute('position', { typedArray: vertices, size: 3 })
     .addAttribute('normal', { typedArray: normal, size: 3 })
-    .addAttribute('rgb', {
-      typedArray: rgb,
-      size: 1,
-      instancedDivisor: 1,
-    })
     .addAttribute('id', {
       typedArray: new Float32Array(ids),
       size: 1,
@@ -413,7 +522,7 @@ if (supportGBuffer) {
     })
   boxesMesh = new InstancedMesh(gl, {
     geometry: geo,
-    instanceCount: PARTICLE_COUNT,
+    instanceCount: OPTIONS.PARTICLE_COUNT,
     defines: {
       G_BUFFER_SUPPORTED: supportGBuffer ? 1 : 0,
     },
@@ -426,7 +535,7 @@ if (supportGBuffer) {
         type: UNIFORM_TYPE_VEC2,
         value: [PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT],
       },
-      fogDensity: { type: UNIFORM_TYPE_FLOAT, value: 0.02 },
+      fogDensity: { type: UNIFORM_TYPE_FLOAT, value: 0.4 },
     },
     vertexShaderSource: BOX_VERTEX_SHADER,
     fragmentShaderSource: BOX_FRAGMENT_SHADER,
@@ -453,7 +562,7 @@ if (supportGBuffer) {
     },
   }
 
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < MAX_ALLOWED_POINT_LIGHTS; i++) {
     const radius = Math.random() * 12
     const position = [
       (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.5,
@@ -513,7 +622,7 @@ if (supportGBuffer) {
       normalTexture: { type: UNIFORM_TYPE_INT, value: 1 },
       colorTexture: { type: UNIFORM_TYPE_INT, value: 2 },
       lightDirection: { type: UNIFORM_TYPE_VEC3, value: [10, 10, 0] },
-      lightFactor: { type: UNIFORM_TYPE_FLOAT, value: 0.1 },
+      lightFactor: { type: UNIFORM_TYPE_FLOAT, value: OPTIONS.dirLightFactor },
     },
     vertexShaderSource: BASE_VERTEX_SHADER,
     fragmentShaderSource: DIRECTIONAL_LIGHT_FRAGMENT_SHADER,
@@ -524,7 +633,7 @@ if (supportGBuffer) {
   Initialise debug quad meshes
 */
 {
-  const debugMeshHeightReference = PARTICLE_TEXTURE_HEIGHT * 0.5
+  const debugMeshHeightReference = 100
   const debugMeshHeightDelta = debugMeshHeightReference / innerHeight
 
   const gpgpuDebugWidth = debugMeshHeightReference
@@ -533,27 +642,29 @@ if (supportGBuffer) {
   const gBufferDebugWidth = innerWidth * debugMeshHeightDelta
   const gBufferDebugHeight = innerHeight * debugMeshHeightDelta
 
-  let debugMeshAccumulatedX = 0
+  const padding = 20
+
+  let debugMeshAccumulatedX = padding
 
   debugGPGPUPositionsMesh = createDebugPlane(
     gpgpuDebugWidth,
     gpgpguDebugHeight,
-    -innerWidth / 2,
-    -innerHeight / 2,
+    -innerWidth / 2 + debugMeshAccumulatedX,
+    -innerHeight / 2 + padding,
   )
   debugMeshAccumulatedX += gpgpuDebugWidth
   debugGPGPUVelocitiesMesh = createDebugPlane(
     gpgpuDebugWidth,
     gpgpguDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2,
+    -innerHeight / 2 + padding,
   )
-  debugMeshAccumulatedX += gpgpuDebugWidth
+  debugMeshAccumulatedX += gpgpuDebugWidth + padding
   debugBoxesPositionsMesh = createDebugPlane(
     gBufferDebugWidth,
     gBufferDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2,
+    -innerHeight / 2 + padding,
   )
   debugMeshAccumulatedX += gBufferDebugWidth
 
@@ -561,7 +672,7 @@ if (supportGBuffer) {
     gBufferDebugWidth,
     gBufferDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2,
+    -innerHeight / 2 + padding,
   )
   debugMeshAccumulatedX += gBufferDebugWidth
 
@@ -569,7 +680,7 @@ if (supportGBuffer) {
     gBufferDebugWidth,
     gBufferDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2,
+    -innerHeight / 2 + padding,
   )
   debugMeshAccumulatedX += gBufferDebugWidth
 
@@ -577,7 +688,7 @@ if (supportGBuffer) {
     gBufferDebugWidth,
     gBufferDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2,
+    -innerHeight / 2 + padding,
     {
       IS_DEPTH_TEXTURE: 1,
       NEAR_PLANE: OPTIONS.CAMERA_NEAR,
@@ -586,21 +697,66 @@ if (supportGBuffer) {
   )
 }
 
-document.body.addEventListener('mousemove', (e) => {
-  mousePos[0] = (e.pageX - innerWidth / 2) / innerWidth
-  mousePos[1] = -(e.pageY - innerHeight / 2) / innerHeight
-})
-requestAnimationFrame(drawFrame)
-document.body.addEventListener('touchmove', (e) => e.preventDefault())
+document.body.addEventListener('mousemove', onMouseMove)
+document.body.addEventListener('touchmove', onTouchMove)
+window.addEventListener('blur', onWindowBlur)
+window.addEventListener('focus', onWindowFocus)
+window.addEventListener('resize', sizeCanvas)
+
+sizeCanvas()
+rAf = requestAnimationFrame(drawFrame)
+
+function onMouseMove(e) {
+  mousePosTarget[0] = (e.pageX - innerWidth / 2) / innerWidth
+  mousePosTarget[1] = -(e.pageY - innerHeight / 2) / innerHeight
+
+  cameraPosTarget[0] = mousePosTarget[0] * 20
+  cameraPosTarget[1] = mousePosTarget[1] * 20
+}
+
+function onTouchMove(e) {
+  e.preventDefault()
+}
+
+function onWindowBlur() {
+  cancelAnimationFrame(rAf)
+}
+
+function onWindowFocus() {
+  oldTime = performance.now() / 1000
+  rAf = requestAnimationFrame(drawFrame)
+}
+
+function sizeCanvas() {
+  canvas.width = innerWidth * devicePixelRatio
+  canvas.height = innerHeight * devicePixelRatio
+  canvas.style.setProperty('width', `${innerWidth}px`)
+  canvas.style.setProperty('height', `${innerHeight}px`)
+}
 
 function drawFrame(ts) {
   ts /= 1000
   const dt = ts - oldTime
   oldTime = ts
 
-  requestAnimationFrame(drawFrame)
+  stats.begin()
 
-  mousePos[2] = Math.sin(ts * 0.2) * 2
+  rAf = requestAnimationFrame(drawFrame)
+
+  mousePosTarget[2] = Math.sin(ts * 0.2) * 2
+
+  const mouseSpeed = dt * 5
+  mousePos[0] += (mousePosTarget[0] - mousePos[0]) * mouseSpeed
+  mousePos[1] += (mousePosTarget[1] - mousePos[1]) * mouseSpeed
+  mousePos[2] += (mousePosTarget[2] - mousePos[2]) * mouseSpeed
+
+  cameraPos[0] += (cameraPosTarget[0] - cameraPos[0]) * dt
+  cameraPos[1] += (cameraPosTarget[1] - cameraPos[1]) * dt
+  cameraPos[2] += (cameraPosTarget[2] - cameraPos[2]) * dt
+
+  perspCamera
+    .setPosition({ x: cameraPos[0], y: cameraPos[1], z: cameraPos[2] })
+    .updateViewMatrix()
 
   /*
     Update velocities and positions on the GPU
@@ -611,6 +767,13 @@ function drawFrame(ts) {
     .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
     // @ts-ignore
     .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
+    // @ts-ignore
+    .setUniform('predator0', UNIFORM_TYPE_VEC4, [
+      Math.sin(ts * 20) * 30,
+      Math.cos(ts * 20) * 30,
+      0,
+      0,
+    ])
     // @ts-ignore
     .setUniform('delta', UNIFORM_TYPE_FLOAT, dt)
     .run(
@@ -628,7 +791,7 @@ function drawFrame(ts) {
     )
     .swap(POSITIONS_TEXTURE_1_NAME, POSITIONS_TEXTURE_2_NAME)
 
-  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+  gl.viewport(0, 0, innerWidth, innerHeight)
   gl.clearColor(0.1, 0.1, 0.1, 1.0)
 
   gl.blendFunc(gl.ONE, gl.ONE)
@@ -662,7 +825,6 @@ function drawFrame(ts) {
       Render positions, normals and colors to separate framebuffers in
       different drawcalls if WEBGL_draw_buffers not available
     */
-    gl.viewport(0, 0, innerWidth, innerHeight)
     ;[
       texturePositionFramebufferFallback,
       textureNormalFramebufferFallback,
@@ -702,62 +864,74 @@ function drawFrame(ts) {
   gl.activeTexture(gl.TEXTURE2)
   textureColor.bind()
 
-  pointLightMeshes.forEach((mesh, i) => {
-    const position = pointLightPositions[i]
-    const radius = pointLightRadiuses[i]
-    position[0] = Math.cos(ts + i + mousePos[0]) * OPTIONS.BOUNDS_X * 0.35
-    position[1] = Math.sin(ts + i + mousePos[1]) * OPTIONS.BOUNDS_Y * 0.35
-    position[2] += dt * 12
-    if (position[2] > OPTIONS.BOUNDS_Z / 2 + radius) {
-      position[2] = -OPTIONS.BOUNDS_Z / 2
-    }
-    mesh
-      .use()
-      .setPosition({
-        x: position[0],
-        y: position[1],
-        z: position[2],
-      })
-      .setUniform(
-        'PointLight.position',
-        UNIFORM_TYPE_VEC3,
-        pointLightPositions[i],
-      )
-      .setCamera(perspCamera)
-      .draw()
-  })
+  pointLightMeshes
+    .filter((_, i) => i < OPTIONS.pointLightActive)
+    .forEach((mesh, i) => {
+      const position = pointLightPositions[i]
+      const radius = pointLightRadiuses[i]
+      const rotSpeed = ts * 0.25
+      position[0] =
+        Math.cos(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) *
+        OPTIONS.BOUNDS_X *
+        0.35
+      position[1] =
+        Math.sin(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) *
+        OPTIONS.BOUNDS_Y *
+        0.35
+      position[2] += dt * 12
+      if (position[2] > OPTIONS.BOUNDS_Z / 2 + radius) {
+        position[2] = -OPTIONS.BOUNDS_Z / 2
+      }
+      mesh
+        .use()
+        .setPosition({
+          x: position[0],
+          y: position[1],
+          z: position[2],
+        })
+        .setUniform(
+          'PointLight.position',
+          UNIFORM_TYPE_VEC3,
+          pointLightPositions[i],
+        )
+        .setCamera(perspCamera)
+        .draw()
+    })
 
   directionalLightMesh.use().setCamera(orthoCamera).draw()
 
-  gl.disable(gl.BLEND)
+  if (OPTIONS.debugMode) {
+    gl.disable(gl.BLEND)
+    gl.activeTexture(gl.TEXTURE0)
+    swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+    debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
-  debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
+    gl.activeTexture(gl.TEXTURE0)
+    swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+    debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-  debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
+    gl.activeTexture(gl.TEXTURE0)
+    texturePosition.bind()
+    debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  texturePosition.bind()
-  debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
+    gl.activeTexture(gl.TEXTURE0)
+    textureNormal.bind()
+    debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  textureNormal.bind()
-  debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
+    gl.activeTexture(gl.TEXTURE0)
+    textureColor.bind()
+    debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
 
-  gl.activeTexture(gl.TEXTURE0)
-  textureColor.bind()
-  debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
-
-  gl.activeTexture(gl.TEXTURE0)
-  if (supportGBuffer) {
-    depthTexture.bind()
-  } else {
-    textureDepthFramebufferFallback.depthTexture.bind()
+    gl.activeTexture(gl.TEXTURE0)
+    if (supportGBuffer) {
+      depthTexture.bind()
+    } else {
+      textureDepthFramebufferFallback.depthTexture.bind()
+    }
+    debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
   }
-  debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
+
+  stats.end()
 }
 
 function createDebugPlane(width, height, x, y, defines = {}) {

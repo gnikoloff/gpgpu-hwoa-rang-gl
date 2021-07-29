@@ -17,9 +17,9 @@ void main () {
 
   vec3 position = texture2D(positionTexture, fragCoord).xyz;
   vec3 normal = normalize(texture2D(normalTexture, fragCoord).xyz);
-  vec3 color = texture2D(colorTexture, fragCoord).xyz;
+  vec4 color = texture2D(colorTexture, fragCoord);
 
-  vec4 baseColor = vec4(color, 1.0);
+  vec4 baseColor = color;
   vec3 lightVec = PointLight.position - position;
 
   float shininess = PointLight.shininessSpecularRadius.x;

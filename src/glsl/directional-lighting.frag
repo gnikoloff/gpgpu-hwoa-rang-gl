@@ -11,8 +11,8 @@ void main () {
   vec2 fragCoord = gl_FragCoord.xy / resolution;
 
   vec3 normal = normalize(texture2D(normalTexture, fragCoord).xyz);
-  vec3 color = texture2D(colorTexture, fragCoord).xyz;
+  vec4 color = texture2D(colorTexture, fragCoord);
 
   float light = dot(normal, lightDirection);
-  gl_FragColor = vec4(color * light * lightFactor, 1.0);
+  gl_FragColor = color * light * lightFactor;
 }
