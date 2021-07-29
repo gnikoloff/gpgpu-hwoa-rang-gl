@@ -55,7 +55,7 @@ const OPTIONS = {
 
   pointLightActive: 80,
   debugMode: false,
-  dirLightFactor: 0.0185,
+  dirLightFactor: 0.0225,
 }
 
 const PARTICLE_TEXTURE_WIDTH = Math.floor(Math.sqrt(OPTIONS.PARTICLE_COUNT))
@@ -157,8 +157,11 @@ guiControls
 const pointLightMeshes = []
 const pointLightPositions = []
 const pointLightRadiuses = []
+const pointLightMoveRadiuses = []
 
 let oldTime = 0
+let oldWidth = innerWidth
+let oldHeight = innerHeight
 
 let rAf
 let boxesMesh
@@ -596,6 +599,10 @@ if (supportGBuffer) {
     pointLightPositions.push(position)
     pointLightMeshes.push(mesh)
     pointLightRadiuses.push(radius)
+    pointLightMoveRadiuses.push([
+      OPTIONS.BOUNDS_X * (Math.random() * 0.3 + 0.2),
+      OPTIONS.BOUNDS_Y * (Math.random() * 0.3 + 0.2),
+    ])
   }
 }
 
@@ -701,9 +708,9 @@ document.body.addEventListener('mousemove', onMouseMove)
 document.body.addEventListener('touchmove', onTouchMove)
 window.addEventListener('blur', onWindowBlur)
 window.addEventListener('focus', onWindowFocus)
-window.addEventListener('resize', sizeCanvas)
+window.addEventListener('resize', () => sizeCanvas(true))
 
-sizeCanvas()
+sizeCanvas(false)
 rAf = requestAnimationFrame(drawFrame)
 
 function onMouseMove(e) {
@@ -727,11 +734,52 @@ function onWindowFocus() {
   rAf = requestAnimationFrame(drawFrame)
 }
 
-function sizeCanvas() {
+function sizeCanvas(updateCameras = true) {
   canvas.width = innerWidth * devicePixelRatio
   canvas.height = innerHeight * devicePixelRatio
   canvas.style.setProperty('width', `${innerWidth}px`)
   canvas.style.setProperty('height', `${innerHeight}px`)
+
+  if (updateCameras) {
+    orthoCamera.left = -innerWidth / 2
+    orthoCamera.right = innerWidth / 2
+    orthoCamera.top = innerHeight / 2
+    orthoCamera.bottom = -innerHeight / 2
+    orthoCamera.updateProjectionMatrix()
+
+    perspCamera.aspect = innerWidth / innerHeight
+    perspCamera.updateProjectionMatrix()
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+  texturePosition.bind().fromSize(innerWidth, innerHeight)
+  textureNormal.bind().fromSize(innerWidth, innerHeight)
+  textureColor.bind().fromSize(innerWidth, innerHeight)
+  depthTexture.bind().fromSize(innerWidth, innerHeight)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+
+  const scaleX = 1 + oldWidth / innerWidth
+  const scaleY = 1 + oldHeight / innerHeight
+
+  oldWidth = innerWidth
+  oldHeight = innerHeight
+
+  directionalLightMesh.setScale({ x: scaleX, y: scaleY })
+  directionalLightMesh
+    .use()
+    .setUniform('resolution', UNIFORM_TYPE_VEC2, [
+      innerWidth * devicePixelRatio,
+      innerHeight * devicePixelRatio,
+    ])
+
+  pointLightMeshes.forEach((mesh) =>
+    mesh
+      .use()
+      .setUniform('resolution', UNIFORM_TYPE_VEC2, [
+        innerWidth * devicePixelRatio,
+        innerHeight * devicePixelRatio,
+      ]),
+  )
 }
 
 function drawFrame(ts) {
@@ -869,15 +917,12 @@ function drawFrame(ts) {
     .forEach((mesh, i) => {
       const position = pointLightPositions[i]
       const radius = pointLightRadiuses[i]
+      const moveRadius = pointLightMoveRadiuses[i]
       const rotSpeed = ts * 0.25
       position[0] =
-        Math.cos(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) *
-        OPTIONS.BOUNDS_X *
-        0.35
+        Math.cos(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) * moveRadius[0]
       position[1] =
-        Math.sin(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) *
-        OPTIONS.BOUNDS_Y *
-        0.35
+        Math.sin(rotSpeed + i * (i % 2 === 0 ? 1 : -1)) * moveRadius[1]
       position[2] += dt * 12
       if (position[2] > OPTIONS.BOUNDS_Z / 2 + radius) {
         position[2] = -OPTIONS.BOUNDS_Z / 2
