@@ -10,7 +10,7 @@ varying float v_rgb;
 varying vec3 v_position;
 varying vec3 v_positionFromCamera;
 
-#define LOG2 1.442695
+// #define LOG2 1.442695
 
 void main () {
   vec3 normal = normalize(v_normal);

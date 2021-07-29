@@ -4,7 +4,6 @@ import {
   Geometry,
   PerspectiveCamera,
   Mesh,
-  CameraController,
   SwapRenderer,
   UNIFORM_TYPE_FLOAT,
   UNIFORM_TYPE_INT,
@@ -65,6 +64,18 @@ let debugBoxesNormalsMesh
 let debugBoxesColorsMesh
 let debugBoxesDepthMesh
 
+let gBuffer
+
+let texturePositionFramebufferFallback
+let textureNormalFramebufferFallback
+let textureColorFramebufferFallback
+let textureDepthFramebufferFallback
+
+let texturePosition
+let textureNormal
+let textureColor
+let depthTexture
+
 const canvas = document.createElement('canvas')
 
 document.body.appendChild(canvas)
@@ -77,6 +88,9 @@ const gl = canvas.getContext('webgl')
 
 const mousePos = [0, 0, 0]
 
+/*
+  Camera setup
+*/
 const perspCamera = new PerspectiveCamera(
   (45 * Math.PI) / 180,
   innerWidth / innerHeight,
@@ -99,8 +113,10 @@ orthoCamera.lookAt([0, 0, 0])
 
 // new CameraController(perspCamera)
 
+/*
+  GPGPU SwapRenderer
+*/
 const swapRenderer = new SwapRenderer(gl)
-
 const ids = new Array(PARTICLE_COUNT).fill(0).map((_, i) => i)
 const positions = ids
   .map(() => [
@@ -120,7 +136,6 @@ const velocities = ids
     Math.random() * 20,
     1,
   ])
-  // .map(() => [0, 0, 0])
   .flat()
 const typedVelocities = Framebuffer.supportRenderingToFloat(gl)
   ? new Float32Array(velocities)
@@ -147,7 +162,9 @@ swapRenderer
     },
   )
 
-  // Positions
+  /*
+    Init two textures for updating positions on the GPU
+  */
   .createTexture(
     POSITIONS_TEXTURE_1_NAME,
     PARTICLE_TEXTURE_WIDTH,
@@ -171,7 +188,9 @@ swapRenderer
     PARTICLE_TEXTURE_HEIGHT,
   )
 
-  // Velocities
+  /*
+    Init two textures for updating velocities on the GPU
+  */
   .createTexture(
     VELOCITIES_TEXTURE_1_NAME,
     PARTICLE_TEXTURE_WIDTH,
@@ -195,6 +214,9 @@ swapRenderer
     PARTICLE_TEXTURE_HEIGHT,
   )
 
+  /*
+    GPGPU program to update positions
+  */
   .useProgram(UPDATE_POSITIONS_PROGRAM_NAME)
   // @ts-ignore
   .setUniform('positionsTexture', UNIFORM_TYPE_INT, 0)
@@ -206,6 +228,9 @@ swapRenderer
     PARTICLE_TEXTURE_HEIGHT,
   ])
 
+  /*
+    GPGPU program to update velocities
+  */
   .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
   // @ts-ignore
   .setUniform('mousePos', UNIFORM_TYPE_VEC3, mousePos)
@@ -219,22 +244,16 @@ swapRenderer
     PARTICLE_TEXTURE_HEIGHT,
   ])
 
+/*
+  Require needed WebGL extensions
+*/
 const drawBuffersExtension = getExtension(gl, 'WEBGL_draw_buffers')
 const halfFloatTexExtension = getExtension(gl, 'OES_texture_half_float')
 const depthTextureExtension = getExtension(gl, 'WEBGL_depth_texture')
 
-let gBuffer
-
-let texturePositionFramebuffer
-let textureNormalFramebuffer
-let textureColorFramebuffer
-let textureDepthFramebuffer
-
-let texturePosition
-let textureNormal
-let textureColor
-let depthTexture
-
+/*
+  Add color attachments to GBUffer if WEBGL_depth_texture is available
+*/
 if (drawBuffersExtension) {
   gBuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
@@ -327,6 +346,10 @@ const supportGBuffer =
   gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
 
 if (supportGBuffer) {
+  /*
+    Assign color attachments to GBUffer if WEBGL_depth_texture
+    is available
+  */
   drawBuffersExtension.drawBuffersWEBGL([
     drawBuffersExtension.COLOR_ATTACHMENT0_WEBGL, // gl_FragData[0]
     drawBuffersExtension.COLOR_ATTACHMENT1_WEBGL, // gl_FragData[1]
@@ -334,28 +357,35 @@ if (supportGBuffer) {
   ])
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 } else {
-  texturePositionFramebuffer = new Framebuffer(gl, {
+  /*
+    If WEBGL_depth_texture is not available, initialise separate
+    framebuffers with separate color attachments
+  */
+  texturePositionFramebufferFallback = new Framebuffer(gl, {
     inputTexture: texturePosition,
     width: innerWidth,
     height: innerHeight,
   })
-  textureNormalFramebuffer = new Framebuffer(gl, {
+  textureNormalFramebufferFallback = new Framebuffer(gl, {
     inputTexture: textureNormal,
     width: innerWidth,
     height: innerHeight,
   })
-  textureColorFramebuffer = new Framebuffer(gl, {
+  textureColorFramebufferFallback = new Framebuffer(gl, {
     inputTexture: textureColor,
     width: innerWidth,
     height: innerHeight,
   })
-  textureDepthFramebuffer = new Framebuffer(gl, {
+  textureDepthFramebufferFallback = new Framebuffer(gl, {
     width: innerWidth,
     height: innerHeight,
     useDepthRenderBuffer: false,
   })
 }
 
+/*
+  Initialise boxes as instanced mesh
+*/
 {
   const radius = 0.5
   const { vertices, uv, normal, indices } = GeometryUtils.createBox({
@@ -403,6 +433,9 @@ if (supportGBuffer) {
   })
 }
 
+/*
+  Initialise point light meshes
+*/
 {
   const { vertices, indices } = GeometryUtils.createCircle({
     segments: 30,
@@ -457,6 +490,9 @@ if (supportGBuffer) {
   }
 }
 
+/*
+  Initialise directional light fullscreen quad mesh
+*/
 {
   const { indices, vertices } = GeometryUtils.createPlane({
     width: innerWidth,
@@ -484,6 +520,9 @@ if (supportGBuffer) {
   })
 }
 
+/*
+  Initialise debug quad meshes
+*/
 {
   const debugMeshHeightReference = PARTICLE_TEXTURE_HEIGHT * 0.5
   const debugMeshHeightDelta = debugMeshHeightReference / innerHeight
@@ -563,8 +602,10 @@ function drawFrame(ts) {
 
   mousePos[2] = Math.sin(ts * 0.2) * 2
 
+  /*
+    Update velocities and positions on the GPU
+  */
   gl.disable(gl.BLEND)
-
   swapRenderer
     .setSize(PARTICLE_TEXTURE_WIDTH, PARTICLE_TEXTURE_HEIGHT)
     .useProgram(UPDATE_VELOCITIES_PROGRAM_NAME)
@@ -593,6 +634,10 @@ function drawFrame(ts) {
   gl.blendFunc(gl.ONE, gl.ONE)
   gl.depthFunc(gl.LEQUAL)
 
+  /*
+    Render positions, normals and colors to MRT in one go if
+    WEBGL_draw_buffers available
+  */
   if (supportGBuffer) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
     {
@@ -613,12 +658,16 @@ function drawFrame(ts) {
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   } else {
+    /*
+      Render positions, normals and colors to separate framebuffers in
+      different drawcalls if WEBGL_draw_buffers not available
+    */
     gl.viewport(0, 0, innerWidth, innerHeight)
     ;[
-      texturePositionFramebuffer,
-      textureNormalFramebuffer,
-      textureColorFramebuffer,
-      textureDepthFramebuffer,
+      texturePositionFramebufferFallback,
+      textureNormalFramebufferFallback,
+      textureColorFramebufferFallback,
+      textureDepthFramebufferFallback,
     ].map((framebuffer, i) => {
       framebuffer.bind()
       gl.depthMask(true)
@@ -682,33 +731,33 @@ function drawFrame(ts) {
 
   gl.disable(gl.BLEND)
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
-  // debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  swapRenderer.getTexture(POSITIONS_TEXTURE_1_NAME).bind()
+  debugGPGPUPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
-  // debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  swapRenderer.getTexture(VELOCITIES_TEXTURE_1_NAME).bind()
+  debugGPGPUVelocitiesMesh.use().setCamera(orthoCamera).draw()
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // texturePosition.bind()
-  // debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  texturePosition.bind()
+  debugBoxesPositionsMesh.use().setCamera(orthoCamera).draw()
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // textureNormal.bind()
-  // debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  textureNormal.bind()
+  debugBoxesNormalsMesh.use().setCamera(orthoCamera).draw()
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // textureColor.bind()
-  // debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  textureColor.bind()
+  debugBoxesColorsMesh.use().setCamera(orthoCamera).draw()
 
-  // gl.activeTexture(gl.TEXTURE0)
-  // if (supportGBuffer) {
-  //   depthTexture.bind()
-  // } else {
-  //   textureDepthFramebuffer.depthTexture.bind()
-  // }
-  // debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
+  gl.activeTexture(gl.TEXTURE0)
+  if (supportGBuffer) {
+    depthTexture.bind()
+  } else {
+    textureDepthFramebufferFallback.depthTexture.bind()
+  }
+  debugBoxesDepthMesh.use().setCamera(orthoCamera).draw()
 }
 
 function createDebugPlane(width, height, x, y, defines = {}) {
