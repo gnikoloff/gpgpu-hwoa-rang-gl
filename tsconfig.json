@@ -15,11 +15,10 @@
     "resolveJsonModule": true,
     "typeRoots": [
       "./npm_modules/@types/",
-      "./src/types",
-      "./src/lib/hwoa-rang-gl/dist/"
+      "./src/types"
     ]
   },
   "include": [
-    "src",
+    "src/**/*",
   ],
 }
