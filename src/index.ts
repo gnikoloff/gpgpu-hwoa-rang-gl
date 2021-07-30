@@ -376,7 +376,8 @@ swapRenderer
 */
 const drawBuffersExtension = getExtension(gl, 'WEBGL_draw_buffers')
 const halfFloatTexExtension = getExtension(gl, 'OES_texture_half_float')
-const depthTextureExtension = getExtension(gl, 'WEBGL_depth_texture')
+getExtension(gl, 'WEBGL_depth_texture')
+getExtension(gl, 'WEBGL_color_buffer_float')
 
 /*
   Add color attachments to GBUffer if WEBGL_depth_texture is available
@@ -390,7 +391,7 @@ texturePosition = new Texture(gl, {
   type: Framebuffer.supportRenderingToFloat(gl)
     ? gl.FLOAT
     : halfFloatTexExtension.HALF_FLOAT_OES,
-  format: gl.RGB,
+  format: gl.RGBA,
   minFilter: gl.NEAREST,
   magFilter: gl.NEAREST,
 })
@@ -411,7 +412,7 @@ textureNormal = new Texture(gl, {
   type: Framebuffer.supportRenderingToFloat(gl)
     ? gl.FLOAT
     : halfFloatTexExtension.HALF_FLOAT_OES,
-  format: gl.RGB,
+  format: gl.RGBA,
   minFilter: gl.NEAREST,
   magFilter: gl.NEAREST,
 })
@@ -432,7 +433,7 @@ textureColor = new Texture(gl, {
   type: Framebuffer.supportRenderingToFloat(gl)
     ? gl.FLOAT
     : halfFloatTexExtension.HALF_FLOAT_OES,
-  format: gl.RGB,
+  format: gl.RGBA,
   minFilter: gl.NEAREST,
   magFilter: gl.NEAREST,
 })
