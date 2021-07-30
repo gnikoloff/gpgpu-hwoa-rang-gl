@@ -1,6 +1,3 @@
-[submodule "src/hwoa-rang-gl"]
-	path = src/hwoa-rang-gl
-	url = git@github.com:gnikoloff/hwoa-rang-gl.git
 [submodule "src/lib/hwoa-rang-gl"]
 	path = src/lib/hwoa-rang-gl
 	url = git@github.com:gnikoloff/hwoa-rang-gl.git
