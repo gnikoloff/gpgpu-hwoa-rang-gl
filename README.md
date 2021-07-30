@@ -1,4 +1,4 @@
-# WebGL boxes with GPGPU physics and deferred shading
+# GPGPU box physics and deferred shading
 
 ![demo render](/src/assets/hwoa-rang-gl-demo-social.png?raw=true)
 
