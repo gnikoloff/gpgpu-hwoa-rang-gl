@@ -4,7 +4,7 @@
 
 [https://gpgpu-boxes.georgi-nikolov.com/](https://gpgpu-boxes.georgi-nikolov.com/)
 
-WebGL demo written with my personal library ![hwoa-rang-gl](https://gnikoloff.github.io/hwoa-rang-gl/)
+WebGL demo written with my personal library [hwoa-rang-gl](https://gnikoloff.github.io/hwoa-rang-gl/)
 
 Uses deferred shading to render up to 100 000 shaded boxes that are influenced from up to 200 dynamic point lights. Animation of the boxes positions and velocities is all offloaded to the GPU using framebuffer ping-ponging.
 
