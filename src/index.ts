@@ -3,7 +3,6 @@ import './index.css'
 import { GUI } from 'dat.gui'
 import Stats from 'stats.js'
 
-// @ts-ignore
 import {
   Geometry,
   PerspectiveCamera,
