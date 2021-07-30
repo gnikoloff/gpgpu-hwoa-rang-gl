@@ -3,6 +3,7 @@ import './index.css'
 import { GUI } from 'dat.gui'
 import Stats from 'stats.js'
 
+// @ts-ignore
 import {
   Geometry,
   PerspectiveCamera,
@@ -14,11 +15,14 @@ import {
   OrthographicCamera,
   GeometryUtils,
   UNIFORM_TYPE_VEC3,
+  UNIFORM_TYPE_VEC4,
   InstancedMesh,
   Texture,
   Framebuffer,
   getExtension,
 } from './lib/hwoa-rang-gl'
+
+import { isMobileBrowser, toHalf } from './helpers'
 
 import BASE_VERTEX_SHADER from './glsl/base-vertex.vert'
 import BOXES_UPDATE_VELOCITIES_FRAGMENT_SHADER from './glsl/boxes-update-velocities.frag'
@@ -28,8 +32,6 @@ import BOX_FRAGMENT_SHADER from './glsl/box.frag'
 import POINT_LIGHT_FRAGMENT_SHADER from './glsl/point-lighting.frag'
 import DIRECTIONAL_LIGHT_FRAGMENT_SHADER from './glsl/directional-lighting.frag'
 import PLANE_DEBUG_FRAGMENT_SHADER from './glsl/debug-plane.frag'
-import { toHalf } from './helpers'
-import { UNIFORM_TYPE_VEC4 } from './lib/hwoa-rang-gl/dist/esm'
 
 const UPDATE_VELOCITIES_PROGRAM_NAME = 'updateVelocities'
 const UPDATE_POSITIONS_PROGRAM_NAME = 'updatePositions'
@@ -42,7 +44,14 @@ const POSITIONS_TEXTURE_2_NAME = 'positionsTexture2'
 
 const MAX_ALLOWED_POINT_LIGHTS = 200
 
+const IS_MOBILE = isMobileBrowser()
+
 const queryParams = new URLSearchParams(location.search)
+
+const PARTICLE_COUNT =
+  parseInt(queryParams.get('particleCount')) || (IS_MOBILE ? 10000 : 40000)
+const PARTICLE_TEXTURE_WIDTH = Math.floor(Math.sqrt(PARTICLE_COUNT))
+const PARTICLE_TEXTURE_HEIGHT = Math.floor(Math.sqrt(PARTICLE_COUNT))
 
 const OPTIONS = {
   SPEED_LIMIT: 3,
@@ -51,15 +60,12 @@ const OPTIONS = {
   BOUNDS_Z: 120,
   CAMERA_NEAR: 0.1,
   CAMERA_FAR: 100,
-  PARTICLE_COUNT: parseInt(queryParams.get('particleCount')) || 10000,
+  PARTICLE_COUNT,
 
   pointLightActive: 80,
   debugMode: false,
   dirLightFactor: 0.0225,
 }
-
-const PARTICLE_TEXTURE_WIDTH = Math.floor(Math.sqrt(OPTIONS.PARTICLE_COUNT))
-const PARTICLE_TEXTURE_HEIGHT = Math.floor(Math.sqrt(OPTIONS.PARTICLE_COUNT))
 
 const stats = new Stats()
 stats.showPanel(0)
@@ -67,6 +73,7 @@ document.body.appendChild(stats.dom)
 stats.dom.style.setProperty('display', 'none')
 
 const guiControls = new GUI()
+guiControls.close()
 guiControls
   .add(OPTIONS, 'debugMode')
   .name('Debug Mode')
@@ -227,7 +234,7 @@ orthoCamera.lookAt([0, 0, 0])
   GPGPU SwapRenderer
 */
 const swapRenderer = new SwapRenderer(gl)
-const ids = new Array(OPTIONS.PARTICLE_COUNT).fill(0).map((_, i) => i)
+const ids = new Array(PARTICLE_COUNT).fill(0).map((_, i) => i)
 const positions = ids
   .map(() => [
     (Math.random() * 2 - 1) * OPTIONS.BOUNDS_X * 0.3,
@@ -525,7 +532,7 @@ if (supportGBuffer) {
     })
   boxesMesh = new InstancedMesh(gl, {
     geometry: geo,
-    instanceCount: OPTIONS.PARTICLE_COUNT,
+    instanceCount: PARTICLE_COUNT,
     defines: {
       G_BUFFER_SUPPORTED: supportGBuffer ? 1 : 0,
     },
@@ -657,16 +664,20 @@ if (supportGBuffer) {
     gpgpuDebugWidth,
     gpgpguDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2 + padding,
+    -innerHeight / 2 + padding + (IS_MOBILE ? gpgpguDebugHeight + padding : 0),
   )
   debugMeshAccumulatedX += gpgpuDebugWidth
   debugGPGPUVelocitiesMesh = createDebugPlane(
     gpgpuDebugWidth,
     gpgpguDebugHeight,
     -innerWidth / 2 + debugMeshAccumulatedX,
-    -innerHeight / 2 + padding,
+    -innerHeight / 2 + padding + (IS_MOBILE ? gpgpguDebugHeight + padding : 0),
   )
-  debugMeshAccumulatedX += gpgpuDebugWidth + padding
+  if (IS_MOBILE) {
+    debugMeshAccumulatedX = padding
+  } else {
+    debugMeshAccumulatedX += gpgpuDebugWidth + padding
+  }
   debugBoxesPositionsMesh = createDebugPlane(
     gBufferDebugWidth,
     gBufferDebugHeight,
@@ -708,10 +719,11 @@ document.body.addEventListener('mousemove', onMouseMove)
 document.body.addEventListener('touchmove', onTouchMove)
 window.addEventListener('blur', onWindowBlur)
 window.addEventListener('focus', onWindowFocus)
-window.addEventListener('resize', () => sizeCanvas(true))
+window.addEventListener('resize', () => sizeCanvas())
 
-sizeCanvas(false)
+sizeCanvas(false, false, false)
 rAf = requestAnimationFrame(drawFrame)
+document.getElementById('info').className = 'visible'
 
 function onMouseMove(e) {
   mousePosTarget[0] = (e.pageX - innerWidth / 2) / innerWidth
@@ -734,7 +746,11 @@ function onWindowFocus() {
   rAf = requestAnimationFrame(drawFrame)
 }
 
-function sizeCanvas(updateCameras = true) {
+function sizeCanvas(
+  updateCameras = true,
+  updateFramebuffers = true,
+  updateMeshes = true,
+) {
   canvas.width = innerWidth * devicePixelRatio
   canvas.height = innerHeight * devicePixelRatio
   canvas.style.setProperty('width', `${innerWidth}px`)
@@ -751,35 +767,68 @@ function sizeCanvas(updateCameras = true) {
     perspCamera.updateProjectionMatrix()
   }
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
-  texturePosition.bind().fromSize(innerWidth, innerHeight)
-  textureNormal.bind().fromSize(innerWidth, innerHeight)
-  textureColor.bind().fromSize(innerWidth, innerHeight)
-  depthTexture.bind().fromSize(innerWidth, innerHeight)
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  if (updateFramebuffers) {
+    if (supportGBuffer) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, gBuffer)
+    }
+    if (!supportGBuffer) {
+      texturePositionFramebufferFallback.bind()
+    }
+    texturePosition.bind().fromSize(innerWidth, innerHeight)
+    if (!supportGBuffer) {
+      texturePositionFramebufferFallback.unbind()
+    }
+    if (!supportGBuffer) {
+      textureNormalFramebufferFallback.bind()
+    }
+    textureNormal.bind().fromSize(innerWidth, innerHeight)
+    if (!supportGBuffer) {
+      textureNormalFramebufferFallback.unbind()
+    }
+    if (!supportGBuffer) {
+      textureColorFramebufferFallback.bind()
+    }
+    textureColor.bind().fromSize(innerWidth, innerHeight)
+    if (!supportGBuffer) {
+      textureColorFramebufferFallback.unbind()
+    }
+    if (!supportGBuffer) {
+      textureDepthFramebufferFallback.bind()
+    }
+    depthTexture.bind().fromSize(innerWidth, innerHeight)
+    if (!supportGBuffer) {
+      textureDepthFramebufferFallback.unbind()
+    }
+    // if (supportGBuffer) {
+    //   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    // }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  }
 
-  const scaleX = 1 + oldWidth / innerWidth
-  const scaleY = 1 + oldHeight / innerHeight
+  if (updateMeshes) {
+    const scaleX = 1 + oldWidth / innerWidth
+    const scaleY = 1 + oldHeight / innerHeight
 
-  oldWidth = innerWidth
-  oldHeight = innerHeight
-
-  directionalLightMesh.setScale({ x: scaleX, y: scaleY })
-  directionalLightMesh
-    .use()
-    .setUniform('resolution', UNIFORM_TYPE_VEC2, [
-      innerWidth * devicePixelRatio,
-      innerHeight * devicePixelRatio,
-    ])
-
-  pointLightMeshes.forEach((mesh) =>
-    mesh
+    directionalLightMesh.setScale({ x: scaleX, y: scaleY })
+    directionalLightMesh
       .use()
       .setUniform('resolution', UNIFORM_TYPE_VEC2, [
         innerWidth * devicePixelRatio,
         innerHeight * devicePixelRatio,
-      ]),
-  )
+      ])
+
+    pointLightMeshes.forEach((mesh) =>
+      mesh
+        .use()
+        .setUniform('resolution', UNIFORM_TYPE_VEC2, [
+          innerWidth * devicePixelRatio,
+          innerHeight * devicePixelRatio,
+        ]),
+    )
+  }
+
+  oldWidth = innerWidth
+  oldHeight = innerHeight
 }
 
 function drawFrame(ts) {
